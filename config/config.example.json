@@ -1,6 +1,5 @@
 {
-  "window_title_keyword": "",
-  "interval_sec": 1.0,
+  "interval_sec": 0.2,
   "roi": {"x": 10, "y": 10, "w": 80, "h": 30},
   "ocr": {"lang": "ch", "confidence": 0.6}
 }

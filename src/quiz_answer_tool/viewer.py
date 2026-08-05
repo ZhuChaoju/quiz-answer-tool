@@ -18,6 +18,18 @@ PREVIEW_FPS = 60
 OCR_ANSWER_COLOR = "#ff4040"
 
 
+def _dhash(img: Image.Image) -> int:
+    """8x8 感知哈希：ROI 画面是否变化的快速判据（毫秒级）。"""
+    g = img.convert("L").resize((9, 8), Image.BILINEAR)
+    px = list(g.getdata())
+    bits = 0
+    for y in range(8):
+        row = y * 9
+        for x in range(8):
+            bits = (bits << 1) | int(px[row + x] < px[row + x + 1])
+    return bits
+
+
 class Viewer(tk.Tk):
     """窗口 2：预览 + ROI + 答案红框 + 录入。"""
 
@@ -242,13 +254,22 @@ class Viewer(tk.Tk):
 
         def ocr_loop() -> None:
             ocr_cfg = self.cfg.get("ocr", {})
-            interval = self.cfg.get("interval_sec", 1.0)
+            interval = self.cfg.get("interval_sec", 0.2)
             last_key: tuple | None = None
+            last_hash: int | None = None
             while self._running:
                 time.sleep(interval)
                 try:
                     img, _ = screen.capture(source)
                     crop = screen.crop_region(img, self._roi)
+                except Exception as exc:
+                    self._result_queue.put(("error", f"截图失败: {exc}"))
+                    continue
+                cur_hash = _dhash(crop)
+                if cur_hash == last_hash:
+                    continue
+                last_hash = cur_hash
+                try:
                     lines = ocr.recognize(crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
                 except Exception as exc:
                     self._result_queue.put(("error", f"识别失败: {exc}"))
