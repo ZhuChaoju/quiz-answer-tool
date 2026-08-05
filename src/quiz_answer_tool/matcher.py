@@ -33,6 +33,19 @@ class QuestionBank:
             data = json.load(f)
         return cls(data)
 
+    def add(self, question: str, answer: str) -> None:
+        """运行时收录一条题目答案（幂等：已存在则跳过）。"""
+        key = normalize(question)
+        for normalized, _ in self._index:
+            if normalized == key:
+                return
+        q = {"id": len(self._raw) + 1, "question": question, "options": [], "answer": answer}
+        self._raw.append(q)
+        self._index.append((key, q))
+
+    def __len__(self) -> int:
+        return len(self._raw)
+
     def match(self, text: str) -> dict | None:
         """三级匹配，命中返回题目 dict，未命中返回 None。"""
         key = normalize(text)

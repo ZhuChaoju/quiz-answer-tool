@@ -1,4 +1,4 @@
-"""主流程：截图 → OCR → 匹配 → 定位选项 → 点击。"""
+"""识别流水线：实时截屏 → ROI 提取 → OCR → 题库匹配 → 结果供 UI 展示。"""
 
 from __future__ import annotations
 
@@ -6,79 +6,92 @@ import logging
 import threading
 import time
 
-import keyboard
-
-from . import actuator, capture, matcher, ocr
+from . import ocr, screen
 
 log = logging.getLogger("quiz_answer_tool")
 
 
-def _find_option_line(lines: list[ocr.Line], answer: str) -> ocr.Line | None:
-    """在选项行中定位答案所在行：前缀字母匹配优先，其次模糊匹配文本。"""
-    answer_letter = answer.strip().upper()
-    answer_text = None
+def find_answer_line(lines: list[ocr.Line], answer: str) -> ocr.Line | None:
+    """在识别行中定位答案所在行：包含关系优先，其次模糊相似。"""
+    answer = answer.strip()
+    if not answer:
+        return None
     for ln in lines:
-        first = ln.text.strip()[:1].upper()
-        if first == answer_letter:
+        text = ln.text.strip()
+        if not text:
+            continue
+        if text == answer or answer in text or text in answer:
             return ln
-        if answer_letter in ln.text.upper():
-            return ln
+    from difflib import SequenceMatcher
+
+    best: ocr.Line | None = None
+    best_ratio = 0.0
     for ln in lines:
-        if answer_text and answer_text in ln.text:
-            return ln
-    return None
+        text = ln.text.strip()
+        if not text:
+            continue
+        ratio = SequenceMatcher(None, answer, text).ratio()
+        if ratio > best_ratio:
+            best, best_ratio = ln, ratio
+    return best if best_ratio >= 0.7 else None
 
 
-class Pipeline:
-    def __init__(self, cfg: dict, dry_run: bool = False):
+class LivePipeline:
+    """后台循环：按间隔抓取来源、裁剪 ROI、OCR、匹配题库，结果回调输出。"""
+
+    def __init__(self, cfg: dict, source: screen.Source, roi: dict):
         self.cfg = cfg
-        self.dry_run = dry_run
-        self.enabled = False
-        self._stop = threading.Event()
-        self.bank: matcher.QuestionBank | None = None
+        self.source = source
+        self.roi = roi
+        self.bank = None
+        self._running = False
+        self._thread: threading.Thread | None = None
 
-    def run(self, hwnd: int) -> None:
-        """主循环；按 hotkey 切换启停。"""
-        hotkey = self.cfg.get("hotkey", "f8")
-        keyboard.add_hotkey(hotkey, self._toggle)
-        log.info("pipeline started, hotkey=%s", hotkey)
-        try:
-            while not self._stop.is_set():
-                if self.enabled:
-                    self._step(hwnd)
-                time.sleep(self.cfg.get("interval_sec", 0.5))
-        finally:
-            keyboard.remove_hotkey(hotkey)
+    def set_bank(self, bank) -> None:
+        self.bank = bank
+
+    def set_roi(self, roi: dict) -> None:
+        self.roi = roi
+
+    def start(self, on_result) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._loop, args=(on_result,), daemon=True
+        )
+        self._thread.start()
 
     def stop(self) -> None:
-        self._stop.set()
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2)
+            self._thread = None
 
-    def _toggle(self) -> None:
-        self.enabled = not self.enabled
-        log.info("enabled=%s", self.enabled)
-
-    def _step(self, hwnd: int) -> None:
-        if self.bank is None:
-            return
+    def _loop(self, on_result) -> None:
         ocr_cfg = self.cfg.get("ocr", {})
-        q_img = capture.capture_region(hwnd, self.cfg["region_question"])
-        lines = ocr.recognize(q_img, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
-        if not lines:
-            return
-        question_text = lines[0].text
-        question = self.bank.match(question_text)
-        if question is None:
-            log.info("no match: %s", question_text)
-            return
-        log.info("matched #%s: %s -> %s", question.get("id"), question_text, question.get("answer"))
-        opt_img = capture.capture_region(hwnd, self.cfg["region_options"])
-        opt_lines = ocr.recognize(opt_img, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
-        target = _find_option_line(opt_lines, question.get("answer", ""))
-        if target is None:
-            log.warning("option not found for answer %s", question.get("answer"))
-            return
-        img_w, img_h = opt_img.size
-        x_pct = target.center_x / img_w * 100
-        y_pct = target.center_y / img_h * 100
-        actuator.click_relative(hwnd, x_pct, y_pct, dry_run=self.dry_run)
-        log.info("clicked at %.1f%%, %.1f%%", x_pct, y_pct)
+        interval = self.cfg.get("interval_sec", 1.0)
+        last_key: tuple | None = None
+        while self._running:
+            time.sleep(interval)
+            try:
+                img, _ = screen.capture(self.source)
+                crop = screen.crop_region(img, self.roi)
+                lines = ocr.recognize(
+                    crop,
+                    ocr_cfg.get("lang", "ch"),
+                    ocr_cfg.get("confidence", 0.6),
+                )
+            except Exception as exc:
+                log.warning("pipeline step failed: %s", exc)
+                continue
+            if not lines:
+                continue
+            key = tuple(ln.text for ln in lines[:2])
+            if key == last_key:
+                continue
+            last_key = key
+            question = self.bank.match(lines[0].text) if self.bank else None
+            answer = question.get("answer", "") if question else ""
+            answer_line = find_answer_line(lines[1:], answer) if answer else None
+            on_result(lines, question, answer, answer_line)

@@ -8,8 +8,7 @@ import logging
 import sys
 
 from .matcher import QuestionBank
-from .pipeline import Pipeline
-from .window import find_window, list_windows
+from .viewer import Viewer
 
 DEFAULT_CONFIG = "config.json"
 
@@ -19,58 +18,19 @@ def _load_config(path: str) -> dict:
         return json.load(f)
 
 
-def cmd_list_windows(_: argparse.Namespace) -> None:
-    for hwnd, title in list_windows():
-        print(f"{hwnd}\t{title}")
-
-
-def cmd_calibrate(args: argparse.Namespace) -> None:
-    import os
-
-    from . import capture
-    from .window import get_client_rect
-
-    keyword = args.keyword
-    hwnd = find_window(keyword) if keyword else None
-    if hwnd is None:
-        print("window not found, provide --keyword", file=sys.stderr)
-        sys.exit(1)
-    os.makedirs("captures", exist_ok=True)
-    rect = get_client_rect(hwnd)
-    print(f"client rect: {rect.left},{rect.top} {rect.right},{rect.bottom}")
-    for name, region in (("question", args.question), ("options", args.options)):
-        img = capture.capture_region(hwnd, region)
-        path = f"captures/{name}.png"
-        img.save(path)
-        print(f"saved {path} ({img.size[0]}x{img.size[1]})")
-    config = {
-        "window_title_keyword": keyword,
-        "hotkey": "f8",
-        "interval_sec": 0.5,
-        "region_question": args.question,
-        "region_options": args.options,
-        "ocr": {"lang": "ch", "confidence": 0.6},
-    }
-    with open(DEFAULT_CONFIG, "w", encoding="utf-8") as f:
-        json.dump(config, f, ensure_ascii=False, indent=2)
-    print(f"wrote {DEFAULT_CONFIG} (review the screenshots and adjust percentages)")
-
-
 def cmd_run(args: argparse.Namespace) -> None:
     cfg = _load_config(args.config)
-    hwnd = find_window(cfg.get("window_title_keyword", ""))
-    if hwnd is None:
-        print("target window not found", file=sys.stderr)
-        sys.exit(1)
-    bank = QuestionBank.load(args.questions)
-    pipeline = Pipeline(cfg, dry_run=args.dry_run)
-    pipeline.bank = bank
-    print("press F8 to toggle, Ctrl+C to quit")
     try:
-        pipeline.run(hwnd)
-    except KeyboardInterrupt:
-        pipeline.stop()
-        print("\nstopped")
+        bank = QuestionBank.load(args.questions)
+    except FileNotFoundError:
+        print(
+            f"题库文件 {args.questions} 不存在；"
+            f"可用 tools/keju_to_questions.py 从题库文本生成。",
+            file=sys.stderr,
+        )
+        bank = None
+    app = Viewer(cfg, bank, bank_path=args.questions)
+    app.mainloop()
 
 
 def main() -> None:
@@ -78,18 +38,9 @@ def main() -> None:
     parser.add_argument("--debug", action="store_true", help="enable debug logging")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("list-windows", help="list visible windows").set_defaults(func=cmd_list_windows)
-
-    p_cal = sub.add_parser("calibrate", help="capture regions and write config.json")
-    p_cal.add_argument("--keyword", default="", help="window title keyword")
-    p_cal.add_argument("--question", default={"x": 10, "y": 60, "w": 80, "h": 20}, type=json.loads)
-    p_cal.add_argument("--options", default={"x": 10, "y": 80, "w": 80, "h": 15}, type=json.loads)
-    p_cal.set_defaults(func=cmd_calibrate)
-
-    p_run = sub.add_parser("run", help="run the pipeline")
+    p_run = sub.add_parser("run", help="open the live recognition window")
     p_run.add_argument("--config", default=DEFAULT_CONFIG)
     p_run.add_argument("--questions", default="questions.json")
-    p_run.add_argument("--dry-run", action="store_true", help="OCR+match only, no clicks")
     p_run.set_defaults(func=cmd_run)
 
     args = parser.parse_args()

@@ -1,6 +1,6 @@
 # Quiz Answer Tool
 
-Windows 桌面答题辅助工具：选定目标窗口后，自动抓取屏幕固定区域 → OCR 识别题目 → 本地题库匹配 → 模拟点击答案。
+Windows 桌面答题识别辅助工具：选定窗口或屏幕 → 实时预览 → 框选题目区域 → OCR 识别 → 本地题库匹配 → 显示答案（红框标出答案位置），由人工点击作答。
 
 ## 免责声明（必读）
 
@@ -11,12 +11,12 @@ Windows 桌面答题辅助工具：选定目标窗口后，自动抓取屏幕固
 
 ## 功能
 
-- 窗口选择：按标题关键词匹配目标窗口，支持窗口移动/缩放自适应
-- 区域抓取：按窗口客户区百分比坐标抓取题目区与选项区
-- OCR：PaddleOCR 中文识别
-- 匹配：精确 → 子串 → 模糊三级匹配
-- 执行：相对坐标换算屏幕绝对坐标，模拟点击
-- 快捷键：`F8` 切换启停（可配置）
+- **实时预览**：窗口 2 以 60fps 显示所选窗口/屏幕画面
+- **ROI 框选**：预览上拖拽绿色框，框内区域即识别范围（移动/缩放/重画，百分比坐标自适应分辨率）
+- **自动识别**：ROI 内 OCR → 题库匹配 → 显示题目与答案
+- **答案红框**：命中时在预览画面上用红框标出答案所在行
+- **答案录入**：未命中/错题时输入正确答案，一键收录进本地题库（越用越全）
+- 题目去重：相同题面不重复识别
 
 ## 安装
 
@@ -27,50 +27,50 @@ pip install -r requirements.txt
 ## 使用
 
 ```bash
-# 查看窗口列表
-python -m quiz_answer_tool list-windows
+python -m quiz_answer_tool run --questions questions.json
+```
 
-# 校准区域（截图预览 → 输入百分比坐标 → 写 config.json）
-python -m quiz_answer_tool calibrate
+1. 顶部选择画面来源（游戏窗口或整个屏幕）
+2. 拖动绿色 ROI 框包住题目区（如 800x600 游戏窗口的题目区域）
+3. 点「开始」，答案自动显示在下方面板，红框标出位置
+4. 看到答案后人工点击作答
 
-# 运行（F8 启停）
-python -m quiz_answer_tool run
+## 题库准备
+
+`keju_tiku.txt` → `questions.json`：
+
+```bash
+python tools/keju_to_questions.py keju_tiku.txt -o questions.json
+```
+
+`questions.json` 格式（answer 为答案文本）：
+
+```json
+[
+  {"id": 1, "question": "……", "options": [], "answer": "答案文本"}
+]
 ```
 
 ## 配置
 
-复制 `config/config.example.json` 为 `config.json` 并按需修改：
+复制 `config/config.example.json` 为 `config.json`：
 
 ```json
 {
   "window_title_keyword": "",
-  "hotkey": "f8",
-  "interval_sec": 0.5,
-  "region_question": {"x": 10, "y": 60, "w": 80, "h": 20},
-  "region_options":  {"x": 10, "y": 80, "w": 80, "h": 15},
+  "interval_sec": 1.0,
+  "roi": {"x": 10, "y": 10, "w": 80, "h": 30},
   "ocr": {"lang": "ch", "confidence": 0.6}
 }
 ```
 
-区域坐标为窗口客户区**百分比**（0-100），窗口缩放时自动适配。
-
-## 题库格式
-
-`questions.json`（与 `questions.example.json` 同结构，示例仅含自造数据）：
-
-```json
-[
-  {"id": 1, "question": "……", "options": ["A", "B", "C", "D"], "answer": "B"}
-]
-```
+- `interval_sec`：OCR 识别间隔（秒），答题有时间压力时可调小到 0.3
+- `roi`：识别区域（占画面百分比），也可在预览中拖拽调整
 
 ## 工具
 
-`tools/html_to_json.py`：通用 HTML → JSON 转换器，用于把网页题面解析为题库格式（不绑定任何特定站点）。
-
-## 验证
-
-无真实场景时可运行 `--dry-run` 模式：合成测试图 → 截图 → OCR → 匹配 → 仅输出答案，不执行点击。
+- `tools/keju_to_questions.py`：题库文本 → questions.json（自动去重）
+- `tools/html_to_json.py`：通用 HTML → JSON 转换器（不绑定任何特定站点）
 
 ## License
 

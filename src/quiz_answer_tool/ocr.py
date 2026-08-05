@@ -13,6 +13,8 @@ class Line:
     center_x: float
     center_y: float
     confidence: float
+    width: float = 0.0
+    height: float = 0.0
 
 
 _ocr_engine = None
@@ -45,6 +47,8 @@ def recognize(img: Image.Image, lang: str = "ch", min_confidence: float = 0.6) -
                     center_x=sum(xs) / len(xs),
                     center_y=sum(ys) / len(ys),
                     confidence=float(confidence),
+                    width=max(xs) - min(xs),
+                    height=max(ys) - min(ys),
                 )
             )
     lines.sort(key=lambda ln: ln.center_y)

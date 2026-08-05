@@ -1,8 +1,6 @@
 {
   "window_title_keyword": "",
-  "hotkey": "f8",
-  "interval_sec": 0.5,
-  "region_question": {"x": 10, "y": 60, "w": 80, "h": 20},
-  "region_options":  {"x": 10, "y": 80, "w": 80, "h": 15},
+  "interval_sec": 1.0,
+  "roi": {"x": 10, "y": 10, "w": 80, "h": 30},
   "ocr": {"lang": "ch", "confidence": 0.6}
 }
