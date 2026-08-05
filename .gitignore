@@ -20,3 +20,4 @@ build/
 # 运行时数据
 *.log
 captures/
+.DS_Store
