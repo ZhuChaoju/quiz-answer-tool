@@ -5,6 +5,8 @@ config.json
 *.png
 *.jpg
 *.jpeg
+*tiku*.txt
+keju_tiku.txt
 
 # Python
 __pycache__/
