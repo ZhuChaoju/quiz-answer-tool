@@ -41,6 +41,43 @@ python -m quiz_answer_tool run --questions questions.json
 3. 点「开始」，答案自动显示在下方面板，红框标出位置
 4. 看到答案后人工点击作答
 
+## 打包为 exe（构建规范）
+
+目标：改完代码后一键生成免环境 exe（含 Python 运行时与 RapidOCR 模型，~100MB），任意 Windows 电脑双击即用。
+
+### 一键构建
+
+```bat
+build_exe.bat
+```
+
+### 手动构建步骤（build_exe.bat 等价命令）
+
+```bash
+# 1. 安装打包工具（首次）
+pip install pyinstaller
+
+# 2. 打包（onefile 单文件，含 RapidOCR 模型）
+pyinstaller --onefile --name quiz-answer-tool --windowed ^
+  --paths src ^
+  --collect-all rapidocr_onnxruntime ^
+  --hidden-import win32gui ^
+  pack_launcher.py ^
+  --distpath dist --workpath build --clean
+```
+
+### 产物与分发
+
+- 产物：`dist/quiz-answer-tool.exe`
+- 分发到目标电脑时，需把 `config.json`、`questions.json`（或 `config.example.json`）与 exe 放在**同一目录**
+- exe 双击直接运行（`cli.py` 已支持无参数默认进入 run）；命令行 `quiz-answer-tool.exe run` 亦可
+
+### 构建红线（务必遵守）
+
+- **`dist/`、`build/`、`*.spec` 已被 `.gitignore` 排除，exe 一律不得提交/推送 git**
+- 打包入口 `pack_launcher.py` 不能删除（负责模块启动与 windowed 模式 stderr 重定向）
+- 改完代码后必须重新打包：`build_exe.bat`
+
 ## 题库准备
 
 `keju_tiku.txt` → `questions.json`：
