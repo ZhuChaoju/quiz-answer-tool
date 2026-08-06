@@ -52,7 +52,7 @@ def main() -> None:
     _enable_dpi_awareness()
     parser = argparse.ArgumentParser(prog="quiz_answer_tool")
     parser.add_argument("--debug", action="store_true", help="enable debug logging")
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command")
 
     p_run = sub.add_parser("run", help="open the live recognition window")
     p_run.add_argument("--config", default=DEFAULT_CONFIG)
@@ -60,6 +60,11 @@ def main() -> None:
     p_run.set_defaults(func=cmd_run)
 
     args = parser.parse_args()
+    if not args.command:  # 无子命令时默认 run（exe 双击场景）
+        args.debug = False
+        args.func = cmd_run
+        args.config = DEFAULT_CONFIG
+        args.questions = "questions.json"
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",

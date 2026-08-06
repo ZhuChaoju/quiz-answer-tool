@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import numpy as np
 from PIL import Image
+
+# OCR 常把换行/噪声误识成竖线类字符，识别后统一剔除（题目里实际不含此类字符）
+VLINE_RE = re.compile(r"[|｜丨¦ǀ‖]")
 
 
 @dataclass
@@ -50,6 +54,9 @@ def recognize(img: Image.Image, lang: str = "ch", min_confidence: float = 0.6) -
         box, text, confidence = item
         if float(confidence) < min_confidence or not text.strip():
             continue
+        text = VLINE_RE.sub("", str(text).strip())
+        if not text:
+            continue
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
         lines.append(
@@ -73,7 +80,7 @@ def merge_lines(lines: list[Line]) -> list[Line]:
     groups: list[list[Line]] = []
     for ln in ordered:
         if groups and ln.center_y - groups[-1][-1].center_y < (
-            max(ln.height, groups[-1][-1].height) * 0.6
+            max(ln.height, groups[-1][-1].height) * 0.9
         ):
             groups[-1].append(ln)
         else:

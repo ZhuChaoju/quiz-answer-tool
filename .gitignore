@@ -16,6 +16,13 @@ __pycache__/
 venv/
 dist/
 build/
+*.spec
+
+# 打包产物与临时文件
+exe_out.txt
+exe_err.txt
+ocr_result.txt
+pipeline_test*.txt
 
 # 运行时数据
 *.log

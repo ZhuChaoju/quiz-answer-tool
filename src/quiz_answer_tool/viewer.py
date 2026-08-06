@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import queue
+import re
 import threading
 import time
 import tkinter as tk
@@ -47,6 +48,7 @@ class Viewer(tk.Tk):
         self._source = tk.StringVar()
         self._roi = dict(cfg.get("roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
         self._img: Image.Image | None = None
+        self._full_size: tuple[int, int] | None = None  # 原始截图尺寸（OCR 坐标基准）
         self._scale = 1.0
         self._offset = (0.0, 0.0)
         self._drag = None
@@ -54,6 +56,14 @@ class Viewer(tk.Tk):
         self._last_question = ""
 
         self._build_ui()
+        # 默认窗口尺寸放大（预览 900px 宽 + 底部信息面板），贴屏幕右缘显示
+        # （游戏窗口通常放左边，工具窗口放右边便于对照）
+        self.geometry("1600x1000")
+        self.update_idletasks()
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        x = max(sw - self.winfo_width() - 20, 0)
+        y = max((sh - self.winfo_height()) // 2, 0)
+        self.geometry(f"+{x}+{y}")
         self.after(16, self._poll_queues)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -76,12 +86,14 @@ class Viewer(tk.Tk):
 
         panel = ttk.Frame(self, padding=6)
         panel.pack(fill="x")
-        self._q_var = tk.StringVar(value="题目: -")
-        self._a_var = tk.StringVar(value="答案: -")
-        self._raw_var = tk.StringVar(value="识别文本: -")
-        ttk.Label(panel, textvariable=self._q_var, wraplength=760).pack(anchor="w")
-        ttk.Label(panel, textvariable=self._a_var, font=("TkDefaultFont", 14, "bold"), foreground="#0a0").pack(anchor="w")
-        ttk.Label(panel, textvariable=self._raw_var, wraplength=760, foreground="#666").pack(anchor="w")
+        # 固定行数：防止文字换行改变底部面板高度，导致预览画布被挤动、画面跳动；
+        # 用只读 Text 代替 Label，便于鼠标选中复制识别文本
+        self._q_text = self._readonly_text(panel, height=3)
+        self._a_text = self._readonly_text(panel, height=2, fg="#0a0", bold=True, font_size=16)
+        self._raw_text = self._readonly_text(panel, height=4, fg="#666")
+        self._set_text(self._q_text, "题目: -")
+        self._set_text(self._a_text, "答案: -")
+        self._set_text(self._raw_text, "识别文本: -")
 
         row = ttk.Frame(panel)
         row.pack(fill="x", pady=(4, 0))
@@ -96,6 +108,50 @@ class Viewer(tk.Tk):
         self._update_roi_label()
 
         self._reload_sources()
+
+    # ---- 底部只读文本（可选中复制） ----
+    def _readonly_text(
+        self,
+        master: tk.Widget,
+        height: int,
+        fg: str = "#000",
+        bold: bool = False,
+        font_size: int = 10,
+    ) -> tk.Text:
+        """创建只读多行文本框：鼠标可选、Ctrl+C 可复制，但不能编辑。"""
+        font = ("TkDefaultFont", font_size, "bold" if bold else "normal")
+        text = tk.Text(
+            master,
+            height=height,
+            wrap="word",
+            relief="flat",
+            highlightthickness=0,
+            padx=2,
+            pady=1,
+            font=font,
+            fg=fg,
+            bg="#f8f8f8",
+            cursor="arrow",
+        )
+        text.bind("<Key>", self._block_edit)
+        text.pack(fill="x")
+        return text
+
+    @staticmethod
+    def _block_edit(event: tk.Event) -> str | None:
+        """只读：放行复制/全选等 Ctrl 组合键，拦截普通输入与删除键。"""
+        if event.state & 0x4:  # Ctrl 按下
+            return None
+        if event.keysym in ("BackSpace", "Delete", "Return", "Tab", "space"):
+            return "break"
+        if event.char and event.char.isprintable():
+            return "break"
+        return None
+
+    @staticmethod
+    def _set_text(widget: tk.Text, text: str) -> None:
+        widget.delete("1.0", "end")
+        widget.insert("1.0", text)
 
     # ---- 来源管理 ----
     def _reload_sources(self) -> None:
@@ -112,8 +168,9 @@ class Viewer(tk.Tk):
         return None
 
     # ---- 预览渲染 ----
-    def _render(self, img: Image.Image) -> None:
+    def _render(self, img: Image.Image, full_size: tuple[int, int]) -> None:
         self._img = img
+        self._full_size = full_size
         cw = max(self._canvas.winfo_width(), 200)
         ch = max(self._canvas.winfo_height(), 150)
         self._scale = min(cw / img.width, ch / img.height)
@@ -144,17 +201,35 @@ class Viewer(tk.Tk):
         self._canvas.create_rectangle(x2 - 10, y2 - 10, x2, y2, fill="#00ff00", outline="", tags="roi")
 
     def _draw_answer_box(self) -> None:
-        if self._img is None or self._answer_line is None:
+        if self._img is None or self._answer_line is None or self._full_size is None:
             return
-        w, h = self._img.size
-        roi = self._roi
-        ax = (roi["x"] + self._answer_line.center_x / (w * roi["w"] / 100) * roi["w"]) / 100 * w
-        ay = (roi["y"] + self._answer_line.center_y / (h * roi["h"] / 100) * roi["h"]) / 100 * h
-        aw = self._answer_line.width / (w * roi["w"] / 100) * roi["w"] / 100 * w
-        ah = self._answer_line.height / (h * roi["h"] / 100) * roi["h"] / 100 * h
-        x1, y1 = self._img_to_canvas(ax - aw / 2, ay - ah / 2)
-        x2, y2 = self._img_to_canvas(ax + aw / 2, ay + ah / 2)
+        line, left, right = self._answer_line
+        # OCR 基于 ROI 裁剪图识别：先换算回原图坐标（加 ROI 偏移），再换算到显示图坐标
+        fw, fh = self._full_size
+        ratio_x = self._img.width / fw
+        ratio_y = self._img.height / fh
+        roi_x = fw * self._roi["x"] / 100
+        roi_y = fh * self._roi["y"] / 100
+        ax = (roi_x + line.center_x) * ratio_x
+        ay = (roi_y + line.center_y) * ratio_y
+        half_w = line.width / 2 * ratio_x
+        x1, y1 = self._img_to_canvas(ax - half_w + line.width * left * ratio_x, ay - line.height / 2 * ratio_y)
+        x2, y2 = self._img_to_canvas(ax - half_w + line.width * right * ratio_x, ay + line.height / 2 * ratio_y)
         self._canvas.create_rectangle(x1, y1, x2, y2, outline=OCR_ANSWER_COLOR, width=3, tags="ans")
+
+    @staticmethod
+    def _is_ui_noise(text: str) -> bool:
+        """系统 UI 噪声行：标题、按钮、进度提示、关卡提示等，不影响识别结果。"""
+        t = text.strip()
+        if len(t) <= 1:  # 如 "问" 按钮
+            return True
+        if re.search(
+            r"离开答题|当前第\s*\d|还可以答|附加考题?|附加题|第\d+题"
+            r"|连对|科举大赛第?\s*\d*\s*关|这一关考的是|殿试部分",
+            t,
+        ):
+            return True
+        return False
 
     # ---- ROI 拖拽 ----
     def _to_img_coord(self, cx: float, cy: float) -> tuple[float, float]:
@@ -235,6 +310,7 @@ class Viewer(tk.Tk):
                 t0 = time.perf_counter()
                 try:
                     img, _ = screen.capture(source)
+                    full_size = img.size  # 记录原始尺寸，OCR 红框换算依赖它
                     ratio = PREVIEW_WIDTH / img.width
                     if ratio < 1.0:
                         img = img.resize(
@@ -242,7 +318,7 @@ class Viewer(tk.Tk):
                             Image.BILINEAR,
                         )
                     try:
-                        self._preview_queue.put_nowait(img)
+                        self._preview_queue.put_nowait((img, full_size))
                     except queue.Full:
                         pass
                 except Exception as exc:
@@ -270,17 +346,31 @@ class Viewer(tk.Tk):
                     continue
                 last_hash = cur_hash
                 try:
+                    # 按 ROI 裁剪识别：绿框内包含题目与选项，框外内容不参与识别
                     lines = ocr.recognize(crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
                 except Exception as exc:
                     self._result_queue.put(("error", f"识别失败: {exc}"))
                     continue
                 if not lines:
                     continue
+                # 剔除系统 UI 噪声行（标题、按钮、进度提示等），只留题目与选项，
+                # 这样 ROI 框大一些也不会被其他文字干扰匹配与红框定位
+                lines = [ln for ln in lines if not self._is_ui_noise(ln.text)]
+                if not lines:
+                    continue
                 key = tuple(ln.text for ln in lines[:2])
                 if key == last_key:
                     continue
                 last_key = key
-                question = self.bank.match(lines[0].text) if self.bank else None
+                # 题目匹配：优先取 ROI 内的行（用户框的题目区），用最长行匹配；
+                # 未命中再用合并全文兜底
+                main_line = max(lines, key=lambda ln: len(ln.text))
+                full_text = "".join(ln.text for ln in lines)
+                question = None
+                if self.bank is not None:
+                    question = self.bank.match(main_line.text)
+                    if question is None:
+                        question = self.bank.match(full_text)
                 answer = question.get("answer", "") if question else ""
                 answer_line = self._find_answer_line(lines[1:], answer) if answer else None
                 self._result_queue.put(("result", lines, question, answer, answer_line))
@@ -291,26 +381,49 @@ class Viewer(tk.Tk):
             self._threads.append(t)
 
     @staticmethod
-    def _find_answer_line(lines: list[ocr.Line], answer: str) -> ocr.Line | None:
+    def _find_answer_line(lines: list[ocr.Line], answer: str) -> tuple[ocr.Line, float, float] | None:
+        """在识别行中定位答案所在行，返回 (行, 答案文本在行内的左右比例, 右比例)。
+
+        选项行通常带 A、B、C、D 前缀且一行含多个选项，用比例把红框精确到
+        单个选项，而不是圈整行。
+        """
         from difflib import SequenceMatcher
+        import re
+
+        # 剥离行首的选项前缀，如 "A、" "B." "1、" "2、" 等
+        prefix_re = re.compile(r"^[A-Za-z一二三四五六七八九十百\d]+[、.．:：]\s*")
+
+        def clean(text: str) -> str:
+            return prefix_re.sub("", text.strip())
 
         answer = answer.strip()
         if not answer:
             return None
+        # 答案可能含 "/" 分隔的多段（如 "及时好雨润新绿／送暖春风过万家"），任一命中即可
+        answer_parts = [p.strip() for p in re.split(r"[/／]", answer) if p.strip()]
         for ln in lines:
-            text = ln.text.strip()
-            if text and (text == answer or answer in text or text in answer):
-                return ln
+            text = clean(ln.text)
+            if not text:
+                continue
+            for part in answer_parts:
+                if part == text or part in text or text in part:
+                    idx = text.find(part)
+                    if idx >= 0:
+                        left = idx / max(len(text), 1)
+                        right = (idx + len(part)) / max(len(text), 1)
+                    else:
+                        left, right = 0.0, 1.0
+                    return ln, left, right
         best: ocr.Line | None = None
         best_ratio = 0.0
         for ln in lines:
-            text = ln.text.strip()
+            text = clean(ln.text)
             if not text:
                 continue
-            ratio = SequenceMatcher(None, answer, text).ratio()
+            ratio = max(SequenceMatcher(None, part, text).ratio() for part in answer_parts)
             if ratio > best_ratio:
                 best, best_ratio = ln, ratio
-        return best if best_ratio >= 0.7 else None
+        return (best, 0.0, 1.0) if best and best_ratio >= 0.7 else None
 
     # ---- 答案录入（收录到题库） ----
     def _add_answer(self) -> None:
@@ -327,17 +440,17 @@ class Viewer(tk.Tk):
                 with open(self.bank_path, "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=1)
         except OSError as exc:
-            self._a_var.set(f"写入题库失败: {exc}")
+            self._set_text(self._a_text, f"写入题库失败: {exc}")
             return
-        self._a_var.set(f"已收录: {self._last_question} → {text}")
+        self._set_text(self._a_text, f"已收录: {self._last_question} → {text}")
         self._entry_var.set("")
 
     # ---- 队列轮询 ----
     def _poll_queues(self) -> None:
         try:
             while True:
-                img = self._preview_queue.get_nowait()
-                self._render(img)
+                img, full_size = self._preview_queue.get_nowait()
+                self._render(img, full_size)
         except queue.Empty:
             pass
         try:
@@ -345,15 +458,18 @@ class Viewer(tk.Tk):
                 kind, *payload = self._result_queue.get_nowait()
                 if kind == "result":
                     lines, question, answer, answer_line = payload
-                    self._last_question = lines[0].text
+                    # 题目栏显示题库命中的原文（干净无"御前科举大赛第X关"等前缀），
+                    # 未命中则显示识别到的第一行
+                    q_display = question.get("question", "") if question else lines[0].text
+                    self._last_question = q_display
                     self._answer_line = answer_line
-                    self._q_var.set(f"题目: {lines[0].text}")
-                    self._a_var.set(f"答案: {answer}" if answer else "未命中")
-                    raw = " | ".join(ln.text for ln in lines)
-                    self._raw_var.set(f"识别文本: {raw}")
+                    self._set_text(self._q_text, f"题目: {q_display}")
+                    self._set_text(self._a_text, f"答案: {answer}" if answer else "未命中")
+                    raw = "\n".join(ln.text for ln in lines)
+                    self._set_text(self._raw_text, f"识别文本: {raw}")
                     self._draw_answer_box()
                 elif kind == "error":
-                    self._a_var.set(payload[0])
+                    self._set_text(self._a_text, payload[0])
         except queue.Empty:
             pass
         self.after(16, self._poll_queues)
