@@ -89,7 +89,10 @@ def merge_lines(lines: list[Line]) -> list[Line]:
     for group in groups:
         group.sort(key=lambda ln: ln.center_x)
         total_w = sum(ln.width for ln in group)
-        weights = sum(ln.center_x * ln.width for ln in group) / total_w
+        if total_w > 0:
+            weights = sum(ln.center_x * ln.width for ln in group) / total_w
+        else:  # 异常防护：所有段宽为 0 时退化为均值
+            weights = sum(ln.center_x for ln in group) / len(group)
         merged.append(
             Line(
                 text="".join(ln.text for ln in group),

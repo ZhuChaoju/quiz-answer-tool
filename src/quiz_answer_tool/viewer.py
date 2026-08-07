@@ -43,6 +43,7 @@ class Viewer(tk.Tk):
         self._result_queue: queue.Queue = queue.Queue()
         self._preview_queue: queue.Queue = queue.Queue(maxsize=2)
         self._running = False
+        self._generation = 0  # 线程代际：停止+再启动时递增，让旧线程及时退出
         self._threads: list[threading.Thread] = []
 
         self._source = tk.StringVar()
@@ -294,6 +295,7 @@ class Viewer(tk.Tk):
     def _toggle(self) -> None:
         if self._running:
             self._running = False
+            self._generation += 1  # 使旧线程下一轮循环退出
             self._start_btn.config(text="开始")
             return
         source = self._current_source()
@@ -304,9 +306,14 @@ class Viewer(tk.Tk):
         self._start_threads(source)
 
     def _start_threads(self, source: screen.Source) -> None:
+        generation = self._generation
+
+        def alive() -> bool:
+            return self._running and generation == self._generation
+
         def preview_loop() -> None:
             period = 1.0 / PREVIEW_FPS
-            while self._running:
+            while alive():
                 t0 = time.perf_counter()
                 try:
                     img, _ = screen.capture(source)
@@ -333,7 +340,7 @@ class Viewer(tk.Tk):
             interval = self.cfg.get("interval_sec", 0.2)
             last_key: tuple | None = None
             last_hash: int | None = None
-            while self._running:
+            while alive():
                 time.sleep(interval)
                 try:
                     img, _ = screen.capture(source)
@@ -388,7 +395,6 @@ class Viewer(tk.Tk):
         单个选项，而不是圈整行。
         """
         from difflib import SequenceMatcher
-        import re
 
         # 剥离行首的选项前缀，如 "A、" "B." "1、" "2、" 等
         prefix_re = re.compile(r"^[A-Za-z一二三四五六七八九十百\d]+[、.．:：]\s*")

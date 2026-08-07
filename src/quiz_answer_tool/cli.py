@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 
 from .matcher import QuestionBank
@@ -29,11 +30,32 @@ def _enable_dpi_awareness() -> None:
 
 
 def _load_config(path: str) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(
+            f"配置文件 {path} 不存在，使用默认配置；"
+            f"可从 config/config.example.json 复制一份。",
+            file=sys.stderr,
+        )
+        return {}
+
+
+def _data_dir() -> str:
+    """数据文件目录：exe 场景取 exe 所在目录（双击/快捷方式启动均稳定），源码场景取当前目录。"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.getcwd()
 
 
 def cmd_run(args: argparse.Namespace) -> None:
+    # 相对路径统一锚定到数据目录，避免快捷方式启动时工作目录漂移
+    base = _data_dir()
+    for attr in ("config", "questions"):
+        path = getattr(args, attr)
+        if not os.path.isabs(path):
+            setattr(args, attr, os.path.join(base, path))
     cfg = _load_config(args.config)
     try:
         bank = QuestionBank.load(args.questions)
