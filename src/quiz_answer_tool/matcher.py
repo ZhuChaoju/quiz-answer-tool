@@ -34,10 +34,11 @@ class QuestionBank:
         return cls(data)
 
     def add(self, question: str, answer: str) -> None:
-        """运行时收录一条题目答案（幂等：已存在则跳过）。"""
+        """运行时收录一条题目答案（题目已存在时用新答案覆盖旧答案）。"""
         key = normalize(question)
-        for normalized, _ in self._index:
+        for normalized, q in self._index:
             if normalized == key:
+                q["answer"] = answer
                 return
         q = {"id": len(self._raw) + 1, "question": question, "options": [], "answer": answer}
         self._raw.append(q)

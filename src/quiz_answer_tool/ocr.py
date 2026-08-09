@@ -20,6 +20,8 @@ class Line:
     confidence: float
     width: float = 0.0
     height: float = 0.0
+    # 行内各段（OCR 检测框）的文本与水平占比 (left, right)，用于精确圈选
+    segments: tuple[tuple[str, float, float], ...] = ()
 
 
 _ocr_engine = None
@@ -93,6 +95,14 @@ def merge_lines(lines: list[Line]) -> list[Line]:
             weights = sum(ln.center_x * ln.width for ln in group) / total_w
         else:  # 异常防护：所有段宽为 0 时退化为均值
             weights = sum(ln.center_x for ln in group) / len(group)
+        # 段坐标：每个检测框在该行内的水平占比，供红框精确定位选项
+        segments: list[tuple[str, float, float]] = []
+        acc = 0.0
+        for ln in group:
+            left = acc / total_w if total_w > 0 else 0.0
+            acc += ln.width
+            right = acc / total_w if total_w > 0 else 1.0
+            segments.append((ln.text, left, right))
         merged.append(
             Line(
                 text="".join(ln.text for ln in group),
@@ -100,7 +110,7 @@ def merge_lines(lines: list[Line]) -> list[Line]:
                 center_y=sum(ln.center_y for ln in group) / len(group),
                 confidence=min(ln.confidence for ln in group),
                 width=sum(ln.width for ln in group),
-                height=max(ln.height for ln in group),
+                segments=tuple(segments),
             )
         )
     return merged

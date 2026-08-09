@@ -42,20 +42,20 @@ def _load_config(path: str) -> dict:
         return {}
 
 
-def _data_dir() -> str:
-    """数据文件目录：exe 场景取 exe 所在目录（双击/快捷方式启动均稳定），源码场景取当前目录。"""
+def _resolve_path(path: str) -> str:
+    """解析数据文件路径：exe 场景优先 exe 目录，其次当前工作目录；源码场景用当前目录。"""
+    if os.path.isabs(path):
+        return path
     if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.getcwd()
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        if os.path.exists(os.path.join(exe_dir, path)):
+            return os.path.join(exe_dir, path)
+    return os.path.join(os.getcwd(), path)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
-    # 相对路径统一锚定到数据目录，避免快捷方式启动时工作目录漂移
-    base = _data_dir()
-    for attr in ("config", "questions"):
-        path = getattr(args, attr)
-        if not os.path.isabs(path):
-            setattr(args, attr, os.path.join(base, path))
+    args.config = _resolve_path(args.config)
+    args.questions = _resolve_path(args.questions)
     cfg = _load_config(args.config)
     try:
         bank = QuestionBank.load(args.questions)

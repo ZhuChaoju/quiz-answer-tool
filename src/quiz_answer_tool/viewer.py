@@ -48,6 +48,7 @@ class Viewer(tk.Tk):
 
         self._source = tk.StringVar()
         self._roi = dict(cfg.get("roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
+        self._option_roi = dict(cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0}))
         self._img: Image.Image | None = None
         self._full_size: tuple[int, int] | None = None  # 原始截图尺寸（OCR 坐标基准）
         self._scale = 1.0
@@ -194,23 +195,24 @@ class Viewer(tk.Tk):
         if self._img is None:
             return
         w, h = self._img.size
-        rx, ry = self._roi["x"] / 100 * w, self._roi["y"] / 100 * h
-        rw, rh = self._roi["w"] / 100 * w, self._roi["h"] / 100 * h
-        x1, y1 = self._img_to_canvas(rx, ry)
-        x2, y2 = self._img_to_canvas(rx + rw, ry + rh)
-        self._canvas.create_rectangle(x1, y1, x2, y2, outline="#00ff00", width=2, tags="roi")
-        self._canvas.create_rectangle(x2 - 10, y2 - 10, x2, y2, fill="#00ff00", outline="", tags="roi")
+        # 题目区（绿）+ 选项区（蓝），写死布局便于核对
+        for roi, color in ((self._roi, "#00ff00"), (self._option_roi, "#00aaff")):
+            rx, ry = roi["x"] / 100 * w, roi["y"] / 100 * h
+            rw, rh = roi["w"] / 100 * w, roi["h"] / 100 * h
+            x1, y1 = self._img_to_canvas(rx, ry)
+            x2, y2 = self._img_to_canvas(rx + rw, ry + rh)
+            self._canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags="roi")
 
     def _draw_answer_box(self) -> None:
         if self._img is None or self._answer_line is None or self._full_size is None:
             return
         line, left, right = self._answer_line
-        # OCR 基于 ROI 裁剪图识别：先换算回原图坐标（加 ROI 偏移），再换算到显示图坐标
+        # 答案行坐标基于“选项区”裁剪图：先换算回原图坐标（加 option_roi 偏移），再换算到显示图坐标
         fw, fh = self._full_size
         ratio_x = self._img.width / fw
         ratio_y = self._img.height / fh
-        roi_x = fw * self._roi["x"] / 100
-        roi_y = fh * self._roi["y"] / 100
+        roi_x = fw * self._option_roi["x"] / 100
+        roi_y = fh * self._option_roi["y"] / 100
         ax = (roi_x + line.center_x) * ratio_x
         ay = (roi_y + line.center_y) * ratio_y
         half_w = line.width / 2 * ratio_x
@@ -219,14 +221,28 @@ class Viewer(tk.Tk):
         self._canvas.create_rectangle(x1, y1, x2, y2, outline=OCR_ANSWER_COLOR, width=3, tags="ans")
 
     @staticmethod
+    def _strip_question_prefix(text: str) -> str:
+        """去掉“御前科举大赛第X关…题目：”等关卡前缀，只留题目正文（用于匹配）。"""
+        m = re.search(r"题目[:：]\s*", text)
+        if m:
+            return text[m.end():]
+        return text
+
+    @staticmethod
     def _is_ui_noise(text: str) -> bool:
-        """系统 UI 噪声行：标题、按钮、进度提示、关卡提示等，不影响识别结果。"""
+        """系统 UI 噪声行：标题、按钮、进度提示、关卡提示等，不影响识别结果。
+
+        注意：含 "题目：" 的行是题目正文的一部分，即使带关卡前缀也不过滤。
+        """
         t = text.strip()
         if len(t) <= 1:  # 如 "问" 按钮
             return True
+        if "题目：" in t:
+            return False
         if re.search(
             r"离开答题|当前第\s*\d|还可以答|附加考题?|附加题|第\d+题"
-            r"|连对|科举大赛第?\s*\d*\s*关|这一关考的是|殿试部分",
+            r"|连对|科举大赛第?\s*\d*\s*关|这一关考的是|殿试部分"
+            r"|[吏户礼兵刑工]部考题|已答\d+题|答对\d+题",
             t,
         ):
             return True
@@ -340,47 +356,45 @@ class Viewer(tk.Tk):
             interval = self.cfg.get("interval_sec", 0.2)
             last_key: tuple | None = None
             last_hash: int | None = None
+            # 写死布局（1024x768 固定）：题目区与选项区分离识别
+            q_roi = self.cfg.get("question_roi", {"x": 28.0, "y": 23.0, "w": 55.0, "h": 20.0})
+            o_roi = self.cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0})
             while alive():
                 time.sleep(interval)
                 try:
                     img, _ = screen.capture(source)
-                    crop = screen.crop_region(img, self._roi)
+                    q_crop = screen.crop_region(img, q_roi)
+                    o_crop = screen.crop_region(img, o_roi)
                 except Exception as exc:
                     self._result_queue.put(("error", f"截图失败: {exc}"))
                     continue
-                cur_hash = _dhash(crop)
+                cur_hash = _dhash(q_crop)
                 if cur_hash == last_hash:
                     continue
                 last_hash = cur_hash
                 try:
-                    # 按 ROI 裁剪识别：绿框内包含题目与选项，框外内容不参与识别
-                    lines = ocr.recognize(crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
+                    q_lines = ocr.recognize(q_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
+                    o_lines = ocr.recognize(o_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
                 except Exception as exc:
                     self._result_queue.put(("error", f"识别失败: {exc}"))
                     continue
-                if not lines:
+                # 剔除系统 UI 噪声行（标题、按钮、进度提示等），只留题目与选项
+                q_lines = [ln for ln in q_lines if not self._is_ui_noise(ln.text)]
+                o_lines = [ln for ln in o_lines if not self._is_ui_noise(ln.text)]
+                if not q_lines or not o_lines:
                     continue
-                # 剔除系统 UI 噪声行（标题、按钮、进度提示等），只留题目与选项，
-                # 这样 ROI 框大一些也不会被其他文字干扰匹配与红框定位
-                lines = [ln for ln in lines if not self._is_ui_noise(ln.text)]
-                if not lines:
-                    continue
-                key = tuple(ln.text for ln in lines[:2])
+                key = tuple(ln.text for ln in q_lines[:2])
                 if key == last_key:
                     continue
                 last_key = key
-                # 题目匹配：优先取 ROI 内的行（用户框的题目区），用最长行匹配；
-                # 未命中再用合并全文兜底
-                main_line = max(lines, key=lambda ln: len(ln.text))
-                full_text = "".join(ln.text for ln in lines)
-                question = None
-                if self.bank is not None:
-                    question = self.bank.match(main_line.text)
-                    if question is None:
-                        question = self.bank.match(full_text)
+                # 题目匹配：题目区多行按 y 排序拼接（题目常折行显示），剥关卡前缀后匹配
+                q_lines.sort(key=lambda ln: ln.center_y)
+                main_text = self._strip_question_prefix("".join(ln.text for ln in q_lines))
+                question = self.bank.match(main_text) if self.bank else None
                 answer = question.get("answer", "") if question else ""
-                answer_line = self._find_answer_line(lines[1:], answer) if answer else None
-                self._result_queue.put(("result", lines, question, answer, answer_line))
+                # 答案行定位：只在选项区内找，答案命中段直接给真实坐标
+                answer_line = self._find_answer_line(o_lines, answer) if answer else None
+                self._result_queue.put(("result", q_lines + o_lines, question, answer, answer_line))
 
         for fn in (preview_loop, ocr_loop):
             t = threading.Thread(target=fn, daemon=True)
@@ -413,12 +427,7 @@ class Viewer(tk.Tk):
                 continue
             for part in answer_parts:
                 if part == text or part in text or text in part:
-                    idx = text.find(part)
-                    if idx >= 0:
-                        left = idx / max(len(text), 1)
-                        right = (idx + len(part)) / max(len(text), 1)
-                    else:
-                        left, right = 0.0, 1.0
+                    left, right = Viewer._segment_bounds(ln, part)
                     return ln, left, right
         best: ocr.Line | None = None
         best_ratio = 0.0
@@ -431,6 +440,38 @@ class Viewer(tk.Tk):
                 best, best_ratio = ln, ratio
         return (best, 0.0, 1.0) if best and best_ratio >= 0.7 else None
 
+    @staticmethod
+    def _segment_bounds(line: ocr.Line, part: str) -> tuple[float, float]:
+        """在行内定位答案所在 OCR 段（选项文本框）的水平占比。
+
+        OCR 常把选项拆成多个框且丢失 "A、" 前缀（如《石壕吏》B《长安吏》），
+        因此：先找单段命中；未命中再把相邻段拼起来，取覆盖答案的最窄范围。
+        无段信息时退化为字符比例。
+        """
+        if line.segments:
+            n = len(line.segments)
+            # 1) 单段命中优先
+            for seg_text, seg_left, seg_right in line.segments:
+                if part in seg_text or seg_text in part:
+                    return seg_left, seg_right
+            # 2) 跨段拼接兜底：答案可能被前缀/相邻框拆开，取最窄覆盖范围
+            best: tuple[float, float] | None = None
+            for i in range(n):
+                combined = line.segments[i][0]
+                for j in range(i, n):
+                    if j > i:
+                        combined += line.segments[j][0]
+                    if part in combined or combined in part:
+                        span = (line.segments[i][1], line.segments[j][2])
+                        if best is None or (span[1] - span[0]) < (best[1] - best[0]):
+                            best = span
+            if best is not None:
+                return best
+        idx = line.text.find(part)
+        if idx >= 0:
+            return idx / max(len(line.text), 1), (idx + len(part)) / max(len(line.text), 1)
+        return 0.0, 1.0
+
     # ---- 答案录入（收录到题库） ----
     def _add_answer(self) -> None:
         text = self._entry_var.get().strip()
@@ -441,10 +482,13 @@ class Viewer(tk.Tk):
         try:
             with open(self.bank_path, encoding="utf-8") as f:
                 data = json.load(f)
-            if not any(item.get("question") == self._last_question for item in data):
+            hit = next((item for item in data if item.get("question") == self._last_question), None)
+            if hit is None:
                 data.append({"id": len(data) + 1, "question": self._last_question, "options": [], "answer": text})
-                with open(self.bank_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=1)
+            else:
+                hit["answer"] = text  # 题目已存在：用新答案覆盖旧答案
+            with open(self.bank_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=1)
         except OSError as exc:
             self._set_text(self._a_text, f"写入题库失败: {exc}")
             return
@@ -464,9 +508,11 @@ class Viewer(tk.Tk):
                 kind, *payload = self._result_queue.get_nowait()
                 if kind == "result":
                     lines, question, answer, answer_line = payload
-                    # 题目栏显示题库命中的原文（干净无"御前科举大赛第X关"等前缀），
-                    # 未命中则显示识别到的第一行
-                    q_display = question.get("question", "") if question else lines[0].text
+                    # 题目栏显示题库命中的原文（干净无"御前科举大赛第X关"等前缀）；
+                    # 未命中则显示全部识别文本（OCR 常把一行拆成多段，只看第一行会断）
+                    q_display = question.get("question", "") if question else "".join(
+                        ln.text for ln in lines
+                    )
                     self._last_question = q_display
                     self._answer_line = answer_line
                     self._set_text(self._q_text, f"题目: {q_display}")
