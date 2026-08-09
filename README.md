@@ -1,0 +1,101 @@
+# Quiz Answer Tool (C# / .NET 8)
+
+梦幻西游科举答题识别辅助工具的 **C# 重写版**（v2）。基于 .NET 8 + WPF + RapidOcrNet（PP-OCRv6 中文模型），比 Python 版更快、CPU 占用更低。
+
+> **免责声明（必读）**：本工具为非商用、仅学习交流用途，与任何游戏/平台官方无关联。用于游戏等在线场景可能违反平台服务条款，存在封号或法律风险，一切后果由使用者自行承担。本项目不含任何题库数据、截图或游戏素材（见下方"合规红线"）。
+
+## 功能
+
+- 实时预览游戏窗口画面（1:1 不变形）
+- 自动检测并选中"梦幻西游"窗口
+- 固定 ROI：题目区（绿框）+ 选项区（蓝框），识别范围写死
+- RapidOcrNet（PP-OCRv6 small）识别：题目 OCR 与选项 OCR **双引擎并行**
+- 题库三级匹配：精确 → 子串 → 模糊（SequenceMatcher 块匹配，容错 OCR 错字）
+- 答案红框精确定位（基于 OCR 文本框坐标）
+- 答案录入：未命中时手动收录进题库（覆盖式更新）
+
+## 实测成绩（62 张真实截图）
+
+- 题目命中 **60/62（96.8%）**
+- 答案定位 **58/60（96.7%）**
+- 单题识别 **~420ms**（题目+选项并行）
+
+## 环境要求
+
+- Windows 10/11（x64）
+- .NET 8 SDK（开发）/ 运行时（运行）
+
+## 构建与运行
+
+```bash
+# 开发运行
+dotnet run --project QuizAnswerTool
+
+# 发布单文件 exe（self-contained，任意电脑免装 .NET）
+dotnet publish QuizAnswerTool/QuizAnswerTool.csproj -c Release -r win-x64 \
+  --self-contained true -p:PublishSingleFile=true \
+  -p:IncludeNativeLibrariesForSelfExtract=true \
+  -p:EnableCompressionInSingleFile=true -o publish
+```
+
+发布产物结构（`publish/`）：
+
+```
+quiz-answer-tool.exe          # 主程序（内置 .NET 运行时）
+models/v6/                    # OCR 模型（需单独准备，见下）
+config.json                   # 用户配置
+questions.json                # 题库（需单独准备）
+```
+
+## 数据文件准备
+
+1. **OCR 模型**（git 不提交）：从 RapidAI 官方下载 PP-OCRv6 small 模型到 `models/v6/`：
+   - `PP-OCRv6_det_small.onnx`、`PP-OCRv6_rec_small.onnx`、`PP-OCRv6_det_small` 分类模型、`ppocrv6_dict.txt`
+   - 下载源：https://www.modelscope.cn/models/RapidAI/RapidOCR （onnx/PP-OCRv6/ 目录）
+2. **题库**：`questions.json`（格式见下），从 `keju_tiku.txt` 转换（Python 版 `tools/keju_to_questions.py`）
+3. **配置**：`config.json`（可从 `config.example.json` 复制）
+
+```json
+// questions.json 格式
+[
+  {"id": 1, "question": "题目文本", "options": [], "answer": "答案文本"}
+]
+```
+
+```json
+// config.json
+{
+  "interval_sec": 0.2,
+  "question_roi": {"x": 30.0, "y": 31.0, "w": 45.0, "h": 14.0},
+  "option_roi": {"x": 40.0, "y": 53.0, "w": 35.0, "h": 16.0},
+  "ocr": {"lang": "ch", "confidence": 0.4}
+}
+```
+
+> ROI 为相对游戏窗口客户区的百分比。答题面板位置随游戏版本可能变化，需按实际截图标定。
+
+## 项目结构
+
+```
+QuizAnswerTool/
+├── App.xaml / MainWindow.xaml    # WPF 主界面
+├── Core/
+│   ├── ScreenCapture.cs          # 窗口枚举 + 客户区截图（Win32）
+│   ├── WinOcr.cs                 # RapidOcrNet 封装（双引擎并行）
+│   ├── QuestionBank.cs           # 题库加载 + 三级匹配
+│   ├── AnswerLocator.cs          # 答案行定位（段坐标）
+│   └── Config.cs                 # 配置加载
+└── models/                       # OCR 模型（git 忽略，需手动下载）
+```
+
+## 合规红线（务必遵守）
+
+- **`questions.json`、`config.json`、`keju_tiku.txt`、截图、`models/` 一律不提交 git**（.gitignore 已强制）
+- 仓库不含任何题库数据、截图、游戏素材或受版权保护内容
+- 分发 exe 时需用户自行准备题库与模型，与仓库无关
+
+## 已知限制
+
+- 非答题状态时仍会持续 OCR（CPU 占用偏高），"答题面板检测"待实现
+- 未命中题目靠"答案录入"功能积累题库
+- ROI 写死适配当前游戏版本布局，版本更新后需重新标定

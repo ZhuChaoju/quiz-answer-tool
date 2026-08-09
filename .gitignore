@@ -1,0 +1,26 @@
+# 合规红线：以下文件一律不提交
+# 真实题库、用户配置、截图素材、OCR 模型（体积大且可从官方下载）
+questions.json
+config.json
+*.png
+*.jpg
+*.jpeg
+*tiku*.txt
+keju_tiku.txt
+models/
+
+# .NET 构建产物
+bin/
+obj/
+publish/
+*.user
+
+# 临时文件
+report*.txt
+live_full.png
+*.log
+
+# 编辑器
+.vs/
+.idea/
+.DS_Store

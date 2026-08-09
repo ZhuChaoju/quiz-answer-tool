@@ -1,0 +1,30 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>quiz-answer-tool</AssemblyName>
+    <RootNamespace>QuizAnswerTool</RootNamespace>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="RapidOcrNet" Version="3.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="models\v6\cls.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="models\v6\PP-OCRv6_det_small.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="models\v6\PP-OCRv6_rec_small.onnx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="models\v6\ppocrv6_dict.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="questions.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="config.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
