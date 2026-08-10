@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import queue
 import re
@@ -45,6 +46,7 @@ class Viewer(tk.Tk):
         self._running = False
         self._generation = 0  # 线程代际：停止+再启动时递增，让旧线程及时退出
         self._threads: list[threading.Thread] = []
+        self._ocr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         self._source = tk.StringVar()
         self._roi = dict(cfg.get("roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
@@ -160,8 +162,27 @@ class Viewer(tk.Tk):
         self._sources = screen.list_sources()
         names = [s.name for s in self._sources]
         self._source_box["values"] = names
-        if names:
-            self._source_box.current(0)
+        if not names:
+            return
+        # 配置了窗口关键词时自动选中匹配窗口，否则取第一个窗口源
+        keyword = self.cfg.get("window_keyword", "")
+        idx = 0
+        if keyword:
+            hit = next(
+                (i for i, s in enumerate(self._sources)
+                 if s.kind == "window" and keyword in s.name),
+                None,
+            )
+            if hit is not None:
+                idx = hit
+        else:
+            win_idx = next(
+                (i for i, s in enumerate(self._sources) if s.kind == "window"),
+                None,
+            )
+            if win_idx is not None:
+                idx = win_idx
+        self._source_box.current(idx)
 
     def _current_source(self) -> screen.Source | None:
         idx = self._source_box.current()
@@ -373,8 +394,14 @@ class Viewer(tk.Tk):
                     continue
                 last_hash = cur_hash
                 try:
-                    q_lines = ocr.recognize(q_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6), ocr_cfg.get("model_type", "small"))
-                    o_lines = ocr.recognize(o_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6), ocr_cfg.get("model_type", "small"))
+                    # 题目/选项双引擎并行识别（第二个引擎实例互不阻塞）
+                    mt = ocr_cfg.get("model_type", "small")
+                    lang = ocr_cfg.get("lang", "ch")
+                    conf = ocr_cfg.get("confidence", 0.6)
+                    fq = self._ocr_executor.submit(ocr.recognize, q_crop, lang, conf, mt, False)
+                    fo = self._ocr_executor.submit(ocr.recognize, o_crop, lang, conf, mt, True)
+                    q_lines = fq.result()
+                    o_lines = fo.result()
                 except Exception as exc:
                     self._result_queue.put(("error", f"识别失败: {exc}"))
                     continue
@@ -529,4 +556,5 @@ class Viewer(tk.Tk):
     def _on_close(self) -> None:
         self._running = False
         time.sleep(0.3)
+        self._ocr_executor.shutdown(wait=False)
         self.destroy()

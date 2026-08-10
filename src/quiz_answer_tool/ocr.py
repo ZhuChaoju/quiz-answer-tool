@@ -31,10 +31,33 @@ class Line:
 
 
 _ocr_engine = None
+_ocr_engine2 = None
 _ENGINE_FAILED = False
 _MODEL_TYPE: str | None = None
 
 _MODEL_TYPES = {"tiny", "small", "medium"}
+
+
+def _build_engine(model_type: str):
+    from rapidocr import EngineType, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
+
+    mt = {
+        "tiny": ModelType.TINY,
+        "small": ModelType.SMALL,
+        "medium": ModelType.MEDIUM,
+    }[model_type]
+    return RapidOCR(
+        params={
+            "Det.engine_type": EngineType.ONNXRUNTIME,
+            "Det.lang_type": LangDet.CH,
+            "Det.model_type": mt,
+            "Det.ocr_version": OCRVersion.PPOCRV6,
+            "Rec.engine_type": EngineType.ONNXRUNTIME,
+            "Rec.lang_type": LangRec.CH,
+            "Rec.model_type": mt,
+            "Rec.ocr_version": OCRVersion.PPOCRV6,
+        }
+    )
 
 
 def _get_engine(model_type: str = "small"):
@@ -47,25 +70,7 @@ def _get_engine(model_type: str = "small"):
     if _ENGINE_FAILED:
         raise RuntimeError("RapidOCR 引擎初始化失败")
     try:
-        from rapidocr import EngineType, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
-
-        mt = {
-            "tiny": ModelType.TINY,
-            "small": ModelType.SMALL,
-            "medium": ModelType.MEDIUM,
-        }[model_type]
-        _ocr_engine = RapidOCR(
-            params={
-                "Det.engine_type": EngineType.ONNXRUNTIME,
-                "Det.lang_type": LangDet.CH,
-                "Det.model_type": mt,
-                "Det.ocr_version": OCRVersion.PPOCRV6,
-                "Rec.engine_type": EngineType.ONNXRUNTIME,
-                "Rec.lang_type": LangRec.CH,
-                "Rec.model_type": mt,
-                "Rec.ocr_version": OCRVersion.PPOCRV6,
-            }
-        )
+        _ocr_engine = _build_engine(model_type)
         _MODEL_TYPE = model_type
     except ImportError as exc:
         _ENGINE_FAILED = True
@@ -76,14 +81,35 @@ def _get_engine(model_type: str = "small"):
     return _ocr_engine
 
 
+def _get_engine2(model_type: str = "small"):
+    """第二个引擎实例：与主引擎可并行识别（题目/选项同时推理）。"""
+    global _ocr_engine2, _ENGINE_FAILED
+    if model_type not in _MODEL_TYPES:
+        model_type = "small"
+    if _ocr_engine2 is not None:
+        return _ocr_engine2
+    if _ENGINE_FAILED:
+        raise RuntimeError("RapidOCR 引擎初始化失败")
+    try:
+        _ocr_engine2 = _build_engine(model_type)
+    except Exception as exc:
+        _ENGINE_FAILED = True
+        raise RuntimeError(f"RapidOCR 第二引擎初始化失败: {exc}") from exc
+    return _ocr_engine2
+
+
 def recognize(
     img: Image.Image,
     lang: str = "ch",
     min_confidence: float = 0.6,
     model_type: str = "small",
+    parallel: bool = False,
 ) -> list[Line]:
-    """识别图片中的文本，按行返回（同行文本自动合并，按纵向位置排序）。"""
-    engine = _get_engine(model_type)
+    """识别图片中的文本，按行返回（同行文本自动合并，按纵向位置排序）。
+
+    parallel=True 时使用第二个引擎实例，与主引擎并发调用（互不阻塞）。
+    """
+    engine = _get_engine2(model_type) if parallel else _get_engine(model_type)
     result = engine(np.asarray(img.convert("RGB")))
     lines: list[Line] = []
     if result.txts:
