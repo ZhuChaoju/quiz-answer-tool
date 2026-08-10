@@ -19,7 +19,7 @@ Windows 桌面答题识别辅助工具：选定窗口或屏幕 → 实时预览 
 
 - **实时预览**：窗口 2 以 60fps 显示所选窗口/屏幕画面
 - **ROI 框选**：预览上拖拽绿色框，框内区域即识别范围（移动/缩放/重画，百分比坐标自适应分辨率）
-- **快速识别**：RapidOCR（onnx 推理）识别 ROI 内文本，约 0.2s 出结果；题目未变化时自动跳过识别（零开销）
+- **快速识别**：RapidOCR PP-OCRv6 模型（onnx 推理）识别 ROI 内文本，约 0.2s 出结果；题目未变化时自动跳过识别（零开销）
 - **答案红框**：命中时在预览画面上用红框标出答案所在行
 - **答案录入**：未命中/错题时输入正确答案，一键收录进本地题库（越用越全）
 - 题目去重：相同题面不重复识别
@@ -60,7 +60,7 @@ pip install pyinstaller
 # 2. 打包（onefile 单文件，含 RapidOCR 模型）
 pyinstaller --onefile --name quiz-answer-tool --windowed ^
   --paths src ^
-  --collect-all rapidocr_onnxruntime ^
+  --collect-all rapidocr ^
   --hidden-import win32gui ^
   pack_launcher.py ^
   --distpath dist --workpath build --clean
@@ -101,13 +101,15 @@ python tools/keju_to_questions.py keju_tiku.txt -o questions.json
 ```json
 {
   "interval_sec": 0.2,
-  "roi": {"x": 10, "y": 10, "w": 80, "h": 30},
-  "ocr": {"lang": "ch", "confidence": 0.6}
+  "question_roi": {"x": 28.0, "y": 23.0, "w": 55.0, "h": 24.0},
+  "option_roi": {"x": 25.0, "y": 44.0, "w": 70.0, "h": 24.0},
+  "ocr": {"lang": "ch", "confidence": 0.4, "model_type": "small"}
 }
 ```
 
 - `interval_sec`：画面检测间隔（秒）。题目画面变化时才触发 OCR，变化后约 0.2s 内出答案
-- `roi`：识别区域（占画面百分比），也可在预览中拖拽调整
+- `question_roi` / `option_roi`：题目区与选项区（占画面百分比），也可在预览中拖拽调整
+- `ocr.model_type`：OCR 模型档位 `tiny`（最快）/ `small`（默认，均衡）/ `medium`（最准但约 1.5s+）
 
 ## 工具
 

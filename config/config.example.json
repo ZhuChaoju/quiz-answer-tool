@@ -2,5 +2,5 @@
   "interval_sec": 0.2,
   "question_roi": {"x": 28.0, "y": 23.0, "w": 55.0, "h": 24.0},
   "option_roi": {"x": 25.0, "y": 44.0, "w": 70.0, "h": 24.0},
-  "ocr": {"lang": "ch", "confidence": 0.4}
+  "ocr": {"lang": "ch", "confidence": 0.4, "model_type": "small"}
 }

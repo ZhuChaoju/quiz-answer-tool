@@ -373,8 +373,8 @@ class Viewer(tk.Tk):
                     continue
                 last_hash = cur_hash
                 try:
-                    q_lines = ocr.recognize(q_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
-                    o_lines = ocr.recognize(o_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6))
+                    q_lines = ocr.recognize(q_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6), ocr_cfg.get("model_type", "small"))
+                    o_lines = ocr.recognize(o_crop, ocr_cfg.get("lang", "ch"), ocr_cfg.get("confidence", 0.6), ocr_cfg.get("model_type", "small"))
                 except Exception as exc:
                     self._result_queue.put(("error", f"识别失败: {exc}"))
                     continue
