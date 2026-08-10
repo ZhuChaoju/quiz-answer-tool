@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -27,6 +29,7 @@ public partial class MainWindow : Window
     private List<ScreenSource> _sources = new();
     private CancellationTokenSource? _cts;
     private string _lastQuestion = "";
+    private string _questionsPath = "questions.json";
     private double _previewScale = 1.0;
     private (double X, double Y) _previewOffset;
     private (double W, double H) _previewDispSize;
@@ -54,6 +57,7 @@ public partial class MainWindow : Window
         Directory.CreateDirectory(_tmpDir);
 
         _cfg = Config.Load(configPath);
+        _questionsPath = questionsPath;
         try { _bank = QuestionBank.Load(questionsPath); StatusText.Text = $"题库已加载 {_bank.Count} 题"; }
         catch (Exception ex) { StatusText.Text = $"题库加载失败: {ex.Message}"; }
         try { WinOcr.EnsureEngine(baseDir); }
@@ -221,9 +225,47 @@ public partial class MainWindow : Window
         var text = EntryBox.Text.Trim();
         if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(_lastQuestion) || _bank == null) return;
         _bank.Add(_lastQuestion, text);
-        // 写回 questions.json（同目录）
+        SaveBankToFile(text);
         AnswerText.Text = $"已收录: {_lastQuestion} → {text}";
         EntryBox.Text = "";
+    }
+
+    /// <summary>把录入的答案写回 questions.json（同题覆盖 answer，否则追加）。</summary>
+    private void SaveBankToFile(string text)
+    {
+        try
+        {
+            var json = File.ReadAllText(_questionsPath, Encoding.UTF8);
+            var items = JsonSerializer.Deserialize<List<Dictionary<string, object?>>>(json)
+                        ?? new List<Dictionary<string, object?>>();
+            var hit = items.FirstOrDefault(i => i.GetValueOrDefault("question")?.ToString() == _lastQuestion);
+            if (hit != null)
+            {
+                hit["answer"] = text;
+            }
+            else
+            {
+                items.Add(new Dictionary<string, object?>
+                {
+                    ["id"] = items.Count + 1,
+                    ["question"] = _lastQuestion,
+                    ["options"] = new List<object?>(),
+                    ["answer"] = text,
+                });
+            }
+            File.WriteAllText(
+                _questionsPath,
+                JsonSerializer.Serialize(items, new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                }),
+                Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            AnswerText.Text = "写入题库失败: " + ex.Message;
+        }
     }
 
     // ---- UI 绘制 ----
