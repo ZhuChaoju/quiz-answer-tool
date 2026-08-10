@@ -24,3 +24,7 @@ live_full.png
 .vs/
 .idea/
 .DS_Store
+
+# Python 构建产物
+__pycache__/
+*.py[cod]
