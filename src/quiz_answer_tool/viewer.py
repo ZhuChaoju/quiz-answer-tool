@@ -249,6 +249,36 @@ class Viewer(tk.Tk):
             return text[m.end():]
         return text
 
+    _LEVEL_CUT_RE = re.compile(r"御前科举|第[一二三四五六七八九十百\d]+关\s*[:：]|这一关考的是")
+
+    @classmethod
+    def _clean_question(cls, text: str) -> list[str]:
+        """把一行/整段文本清理成候选题目片段。
+
+        OCR 常把关卡说明行与题目正文合并进同一检测框，且“题目：”可能出现
+        在框内任意位置。因此用两种顺序各清理一次：
+        - 先砍关卡词再截“题目：”（“题目：”在行首/中部时有效）
+        - 先截“题目：”再砍关卡词（“题目：”在行尾时有效，如“…题目：茅台酒属于”）
+        """
+        out: list[str] = []
+        for t in (
+            cls._strip_question_prefix(re.split(cls._LEVEL_CUT_RE, text)[0]),
+            re.split(cls._LEVEL_CUT_RE, cls._strip_question_prefix(text))[0],
+        ):
+            t = t.strip().strip("，。；：、")
+            if len(t) >= 4 and t not in out:
+                out.append(t)
+        return out
+
+    def _match_question(self, joined: str, lines: list[ocr.Line]):
+        """题目匹配：整段优先，逐行兜底（每段按两种清理顺序生成候选）。"""
+        for cand in [joined] + [ln.text for ln in lines]:
+            for t in self._clean_question(cand):
+                q = self.bank.match(t)
+                if q:
+                    return q
+        return None
+
     @staticmethod
     def _is_ui_noise(text: str) -> bool:
         """系统 UI 噪声行：标题、按钮、进度提示、关卡提示等，不影响识别结果。
@@ -414,10 +444,10 @@ class Viewer(tk.Tk):
                 if key == last_key:
                     continue
                 last_key = key
-                # 题目匹配：题目区多行按 y 排序拼接（题目常折行显示），剥关卡前缀后匹配
+                # 题目匹配：题目区多行按 y 排序拼接（题目常折行显示），多策略清理后匹配
                 q_lines.sort(key=lambda ln: ln.center_y)
-                main_text = self._strip_question_prefix("".join(ln.text for ln in q_lines))
-                question = self.bank.match(main_text) if self.bank else None
+                main_text = "".join(ln.text for ln in q_lines)
+                question = self._match_question(main_text, q_lines) if self.bank else None
                 answer = question.get("answer", "") if question else ""
                 # 答案行定位：只在选项区内找，答案命中段直接给真实坐标
                 answer_line = self._find_answer_line(o_lines, answer) if answer else None
