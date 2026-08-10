@@ -103,13 +103,14 @@ python tools/keju_to_questions.py keju_tiku.txt -o questions.json
   "interval_sec": 0.2,
   "question_roi": {"x": 28.0, "y": 23.0, "w": 55.0, "h": 24.0},
   "option_roi": {"x": 25.0, "y": 44.0, "w": 70.0, "h": 24.0},
-  "ocr": {"lang": "ch", "confidence": 0.4, "model_type": "small"}
+  "ocr": {"lang": "ch", "confidence": 0.4, "model_type": "tiny", "use_dml": false}
 }
 ```
 
 - `interval_sec`：画面检测间隔（秒）。题目画面变化时才触发 OCR，变化后约 0.2s 内出答案
 - `question_roi` / `option_roi`：题目区与选项区（占画面百分比），也可在预览中拖拽调整
-- `ocr.model_type`：OCR 模型档位 `tiny`（最快）/ `small`（默认，均衡）/ `medium`（最准但约 1.5s+）
+- `ocr.model_type`：OCR 模型档位 `tiny`（默认，实测 62 张截图命中率最高且最快 ~180ms）/ `small`（均衡 ~350ms）/ `medium`（最准但约 1.5s+）
+- `ocr.use_dml`：Windows 上启用 DirectML GPU 推理（需 `pip install onnxruntime-directml`），有独立显卡时识别可再快数倍
 
 ## 工具
 

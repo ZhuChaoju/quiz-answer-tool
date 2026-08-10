@@ -425,11 +425,12 @@ class Viewer(tk.Tk):
                 last_hash = cur_hash
                 try:
                     # 题目/选项双引擎并行识别（第二个引擎实例互不阻塞）
-                    mt = ocr_cfg.get("model_type", "small")
+                    mt = ocr_cfg.get("model_type", "tiny")
                     lang = ocr_cfg.get("lang", "ch")
                     conf = ocr_cfg.get("confidence", 0.6)
-                    fq = self._ocr_executor.submit(ocr.recognize, q_crop, lang, conf, mt, False)
-                    fo = self._ocr_executor.submit(ocr.recognize, o_crop, lang, conf, mt, True)
+                    dml = ocr_cfg.get("use_dml", False)
+                    fq = self._ocr_executor.submit(ocr.recognize, q_crop, lang, conf, mt, False, dml)
+                    fo = self._ocr_executor.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml)
                     q_lines = fq.result()
                     o_lines = fo.result()
                 except Exception as exc:

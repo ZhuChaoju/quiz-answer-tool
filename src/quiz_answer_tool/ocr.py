@@ -34,11 +34,12 @@ _ocr_engine = None
 _ocr_engine2 = None
 _ENGINE_FAILED = False
 _MODEL_TYPE: str | None = None
+_USE_DML: bool = False
 
 _MODEL_TYPES = {"tiny", "small", "medium"}
 
 
-def _build_engine(model_type: str):
+def _build_engine(model_type: str, use_dml: bool = False):
     from rapidocr import EngineType, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
 
     mt = {
@@ -46,32 +47,36 @@ def _build_engine(model_type: str):
         "small": ModelType.SMALL,
         "medium": ModelType.MEDIUM,
     }[model_type]
-    return RapidOCR(
-        params={
-            "Det.engine_type": EngineType.ONNXRUNTIME,
-            "Det.lang_type": LangDet.CH,
-            "Det.model_type": mt,
-            "Det.ocr_version": OCRVersion.PPOCRV6,
-            "Rec.engine_type": EngineType.ONNXRUNTIME,
-            "Rec.lang_type": LangRec.CH,
-            "Rec.model_type": mt,
-            "Rec.ocr_version": OCRVersion.PPOCRV6,
-        }
-    )
+    params = {
+        "Det.engine_type": EngineType.ONNXRUNTIME,
+        "Det.lang_type": LangDet.CH,
+        "Det.model_type": mt,
+        "Det.ocr_version": OCRVersion.PPOCRV6,
+        "Rec.engine_type": EngineType.ONNXRUNTIME,
+        "Rec.lang_type": LangRec.CH,
+        "Rec.model_type": mt,
+        "Rec.ocr_version": OCRVersion.PPOCRV6,
+    }
+    if use_dml:
+        # Windows 上使用 DirectML（GPU）推理：需 pip install onnxruntime-directml
+        params["Det.use_dml"] = True
+        params["Rec.use_dml"] = True
+    return RapidOCR(params=params)
 
 
-def _get_engine(model_type: str = "small"):
+def _get_engine(model_type: str = "tiny", use_dml: bool = False):
     """惰性加载 RapidOCR（PP-OCRv6，onnxruntime 推理）。"""
-    global _ocr_engine, _ENGINE_FAILED, _MODEL_TYPE
+    global _ocr_engine, _ENGINE_FAILED, _MODEL_TYPE, _USE_DML
     if model_type not in _MODEL_TYPES:
-        model_type = "small"
-    if _ocr_engine is not None and _MODEL_TYPE == model_type:
+        model_type = "tiny"
+    if _ocr_engine is not None and _MODEL_TYPE == model_type and _USE_DML == use_dml:
         return _ocr_engine
     if _ENGINE_FAILED:
         raise RuntimeError("RapidOCR 引擎初始化失败")
     try:
-        _ocr_engine = _build_engine(model_type)
+        _ocr_engine = _build_engine(model_type, use_dml)
         _MODEL_TYPE = model_type
+        _USE_DML = use_dml
     except ImportError as exc:
         _ENGINE_FAILED = True
         raise RuntimeError(f"缺少依赖: {exc}，请安装 rapidocr 与 onnxruntime") from exc
@@ -81,17 +86,17 @@ def _get_engine(model_type: str = "small"):
     return _ocr_engine
 
 
-def _get_engine2(model_type: str = "small"):
+def _get_engine2(model_type: str = "tiny", use_dml: bool = False):
     """第二个引擎实例：与主引擎可并行识别（题目/选项同时推理）。"""
     global _ocr_engine2, _ENGINE_FAILED
     if model_type not in _MODEL_TYPES:
-        model_type = "small"
+        model_type = "tiny"
     if _ocr_engine2 is not None:
         return _ocr_engine2
     if _ENGINE_FAILED:
         raise RuntimeError("RapidOCR 引擎初始化失败")
     try:
-        _ocr_engine2 = _build_engine(model_type)
+        _ocr_engine2 = _build_engine(model_type, use_dml)
     except Exception as exc:
         _ENGINE_FAILED = True
         raise RuntimeError(f"RapidOCR 第二引擎初始化失败: {exc}") from exc
@@ -102,14 +107,16 @@ def recognize(
     img: Image.Image,
     lang: str = "ch",
     min_confidence: float = 0.6,
-    model_type: str = "small",
+    model_type: str = "tiny",
     parallel: bool = False,
+    use_dml: bool = False,
 ) -> list[Line]:
     """识别图片中的文本，按行返回（同行文本自动合并，按纵向位置排序）。
 
     parallel=True 时使用第二个引擎实例，与主引擎并发调用（互不阻塞）。
+    use_dml=True 时 Windows 上优先 DirectML（GPU）推理。
     """
-    engine = _get_engine2(model_type) if parallel else _get_engine(model_type)
+    engine = _get_engine2(model_type, use_dml) if parallel else _get_engine(model_type, use_dml)
     result = engine(np.asarray(img.convert("RGB")))
     lines: list[Line] = []
     if result.txts:

@@ -81,7 +81,8 @@ class LivePipeline:
                     crop,
                     ocr_cfg.get("lang", "ch"),
                     ocr_cfg.get("confidence", 0.6),
-                    ocr_cfg.get("model_type", "small"),
+                    ocr_cfg.get("model_type", "tiny"),
+                    use_dml=ocr_cfg.get("use_dml", False),
                 )
             except Exception as exc:
                 log.warning("pipeline step failed: %s", exc)
