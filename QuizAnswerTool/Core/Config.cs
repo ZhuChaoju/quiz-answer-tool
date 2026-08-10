@@ -12,6 +12,7 @@ public sealed class Config
     public Roi QuestionRoi { get; set; } = new() { X = 28.0, Y = 23.0, W = 55.0, H = 24.0 };
     public Roi OptionRoi { get; set; } = new() { X = 25.0, Y = 44.0, W = 70.0, H = 24.0 };
     public double Confidence { get; set; } = 0.4;
+    public string WindowKeyword { get; set; } = "";
 
     public static Config Load(string path)
     {
@@ -23,6 +24,7 @@ public sealed class Config
             var root = doc.RootElement;
             if (root.TryGetProperty("interval_sec", out var iv)) cfg.IntervalSec = iv.GetDouble();
             if (root.TryGetProperty("confidence", out var cf)) cfg.Confidence = cf.GetDouble();
+            if (root.TryGetProperty("window_keyword", out var wk)) cfg.WindowKeyword = wk.GetString() ?? "";
             if (root.TryGetProperty("ocr", out var ocr) && ocr.TryGetProperty("confidence", out var oc))
                 cfg.Confidence = oc.GetDouble();
             cfg.QuestionRoi = ParseRoi(root, "question_roi") ?? cfg.QuestionRoi;

@@ -73,8 +73,11 @@ public partial class MainWindow : Window
         SourceBox.ItemsSource = _sources.Select(s => s.Name).ToList();
         if (_sources.Count > 0)
         {
-            // 自动选中游戏窗口（梦幻西游），避免用户手动选择
-            int idx = _sources.FindIndex(s => s.Kind == "window" && s.Name.Contains("梦幻西游") && !s.Name.Contains("聊天"));
+            // 配置了窗口关键词时自动选中匹配窗口，否则取第一个窗口源
+            string kw = _cfg.WindowKeyword;
+            int idx = kw.Length > 0
+                ? _sources.FindIndex(s => s.Kind == "window" && s.Name.Contains(kw))
+                : _sources.FindIndex(s => s.Kind == "window");
             SourceBox.SelectedIndex = idx >= 0 ? idx : 0;
         }
     }

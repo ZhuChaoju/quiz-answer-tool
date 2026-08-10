@@ -1,13 +1,13 @@
 # Quiz Answer Tool (C# / .NET 8)
 
-梦幻西游科举答题识别辅助工具的 **C# 重写版**（v2）。基于 .NET 8 + WPF + RapidOcrNet（PP-OCRv6 中文模型），比 Python 版更快、CPU 占用更低。
+桌面答题识别辅助工具的 **C# 重写版**（v2）。基于 .NET 8 + WPF + RapidOcrNet（PP-OCRv6 中文模型），比 Python 版更快、CPU 占用更低。
 
 > **免责声明（必读）**：本工具为非商用、仅学习交流用途，与任何游戏/平台官方无关联。用于游戏等在线场景可能违反平台服务条款，存在封号或法律风险，一切后果由使用者自行承担。本项目不含任何题库数据、截图或游戏素材（见下方"合规红线"）。
 
 ## 功能
 
 - 实时预览游戏窗口画面（1:1 不变形）
-- 自动检测并选中"梦幻西游"窗口
+- 自动检测并选中目标窗口（可在 config.json 配置 window_keyword）
 - 固定 ROI：题目区（绿框）+ 选项区（蓝框），识别范围写死
 - RapidOcrNet（PP-OCRv6 small）识别：题目 OCR 与选项 OCR **双引擎并行**
 - 题库三级匹配：精确 → 子串 → 模糊（SequenceMatcher 块匹配，容错 OCR 错字）
@@ -68,6 +68,7 @@ questions.json                # 题库（需单独准备）
   "interval_sec": 0.2,
   "question_roi": {"x": 30.0, "y": 31.0, "w": 45.0, "h": 14.0},
   "option_roi": {"x": 40.0, "y": 53.0, "w": 35.0, "h": 16.0},
+  "window_keyword": "",
   "ocr": {"lang": "ch", "confidence": 0.4}
 }
 ```
