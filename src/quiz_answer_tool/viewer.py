@@ -49,7 +49,8 @@ class Viewer(tk.Tk):
         self._ocr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         self._source = tk.StringVar()
-        self._roi = dict(cfg.get("roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
+        # 绿框=题目区、蓝框=选项区:与 OCR 实际使用的 ROI 同源,拖拽实时生效
+        self._roi = dict(cfg.get("question_roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
         self._option_roi = dict(cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0}))
         self._img: Image.Image | None = None
         self._full_size: tuple[int, int] | None = None  # 原始截图尺寸（OCR 坐标基准）
@@ -57,6 +58,7 @@ class Viewer(tk.Tk):
         self._img_item = None
         self._q_roi_item = None  # 题目区绿框
         self._o_roi_item = None  # 选项区蓝框
+        self._ans_item = None  # 答案红框（复用，避免每帧新建 item 泄漏）
         self._scale = 1.0
         self._offset = (0.0, 0.0)
         self._drag = None
@@ -244,6 +246,9 @@ class Viewer(tk.Tk):
 
     def _draw_answer_box(self) -> None:
         if self._img is None or self._answer_line is None or self._full_size is None:
+            # 无答案时隐藏红框（item 复用，不删除重建）
+            if self._ans_item is not None:
+                self._canvas.itemconfigure(self._ans_item, state="hidden")
             return
         line, left, right = self._answer_line
         # 答案行坐标基于“选项区”裁剪图：先换算回原图坐标（加 option_roi 偏移），再换算到显示图坐标
@@ -257,7 +262,13 @@ class Viewer(tk.Tk):
         half_w = line.width / 2 * ratio_x
         x1, y1 = self._img_to_canvas(ax - half_w + line.width * left * ratio_x, ay - line.height / 2 * ratio_y)
         x2, y2 = self._img_to_canvas(ax - half_w + line.width * right * ratio_x, ay + line.height / 2 * ratio_y)
-        self._canvas.create_rectangle(x1, y1, x2, y2, outline=OCR_ANSWER_COLOR, width=3, tags="ans")
+        if self._ans_item is None:
+            self._ans_item = self._canvas.create_rectangle(
+                x1, y1, x2, y2, outline=OCR_ANSWER_COLOR, width=3
+            )
+        else:
+            self._canvas.coords(self._ans_item, x1, y1, x2, y2)
+            self._canvas.itemconfigure(self._ans_item, state="normal")
 
     @staticmethod
     def _strip_question_prefix(text: str) -> str:
@@ -317,7 +328,7 @@ class Viewer(tk.Tk):
             return True
         return False
 
-    # ---- ROI 拖拽 ----
+    # ---- ROI 拖拽（题目区绿框 + 选项区蓝框均可拖动/缩放，空白处拖出新题目框） ----
     def _to_img_coord(self, cx: float, cy: float) -> tuple[float, float]:
         ox, oy = self._offset
         return (cx - ox) / self._scale, (cy - oy) / self._scale
@@ -327,16 +338,23 @@ class Viewer(tk.Tk):
             return
         ix, iy = self._to_img_coord(event.x, event.y)
         w, h = self._img.size
-        rx = self._roi["x"] / 100 * w
-        ry = self._roi["y"] / 100 * h
-        rw = self._roi["w"] / 100 * w
-        rh = self._roi["h"] / 100 * h
-        inside = rx <= ix <= rx + rw and ry <= iy <= ry + rh
-        on_handle = ix > rx + rw - 14 and iy > ry + rh - 14
-        self._drag = {"start": (ix, iy), "orig": (rx, ry, rw, rh)}
-        self._drag["mode"] = "resize" if (inside and on_handle) or not inside else "move"
-        if not inside:
-            self._drag["mode"] = "create"
+        # 命中哪个框就拖哪个（选项框判定在前：两框相邻时优先响应更小的选项框）
+        for target, roi in (("o", self._option_roi), ("q", self._roi)):
+            rx = roi["x"] / 100 * w
+            ry = roi["y"] / 100 * h
+            rw = roi["w"] / 100 * w
+            rh = roi["h"] / 100 * h
+            if rx <= ix <= rx + rw and ry <= iy <= ry + rh:
+                on_handle = ix > rx + rw - 14 and iy > ry + rh - 14
+                self._drag = {
+                    "start": (ix, iy),
+                    "orig": (rx, ry, rw, rh),
+                    "target": target,
+                    "mode": "resize" if on_handle else "move",
+                }
+                return
+        # 空白处按下：拖出一个新的题目框
+        self._drag = {"start": (ix, iy), "orig": (0, 0, 0, 0), "target": "q", "mode": "create"}
 
     def _on_drag(self, event) -> None:
         if self._drag is None or self._img is None:
@@ -357,7 +375,11 @@ class Viewer(tk.Tk):
         ny = max(0, min(ny, h - 1))
         nw = max(5, min(nw, w - nx))
         nh = max(5, min(nh, h - ny))
-        self._roi = {"x": nx / w * 100, "y": ny / h * 100, "w": nw / w * 100, "h": nh / h * 100}
+        roi = {"x": nx / w * 100, "y": ny / h * 100, "w": nw / w * 100, "h": nh / h * 100}
+        if self._drag["target"] == "o":
+            self._option_roi = roi
+        else:
+            self._roi = roi
         self._draw_roi()
         self._draw_answer_box()
         self._update_roi_label()
@@ -366,14 +388,19 @@ class Viewer(tk.Tk):
         self._drag = None
 
     def _reset_roi(self) -> None:
-        self._roi = dict(self.cfg.get("roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
+        self._roi = dict(self.cfg.get("question_roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
+        self._option_roi = dict(
+            self.cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0})
+        )
         self._draw_roi()
         self._update_roi_label()
 
     def _update_roi_label(self) -> None:
         self._roi_var.set(
-            f"ROI: x={self._roi['x']:.1f}% y={self._roi['y']:.1f}% "
-            f"w={self._roi['w']:.1f}% h={self._roi['h']:.1f}%"
+            f"题目ROI: x={self._roi['x']:.1f}% y={self._roi['y']:.1f}% "
+            f"w={self._roi['w']:.1f}% h={self._roi['h']:.1f}%  "
+            f"选项ROI: x={self._option_roi['x']:.1f}% y={self._option_roi['y']:.1f}% "
+            f"w={self._option_roi['w']:.1f}% h={self._option_roi['h']:.1f}%"
         )
 
     # ---- 运行控制 ----
@@ -425,9 +452,6 @@ class Viewer(tk.Tk):
             interval = self.cfg.get("interval_sec", 0.05)
             last_key: tuple | None = None
             last_hash: int | None = None
-            # 写死布局（1024x768 固定）：题目区与选项区分离识别
-            q_roi = self.cfg.get("question_roi", {"x": 28.0, "y": 23.0, "w": 55.0, "h": 20.0})
-            o_roi = self.cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0})
             # 引擎预热：模型加载与首次推理较慢（秒级），点「开始」时先跑空图完成，
             # 避免第一道题多等数秒。预热失败不打断，首次真实识别会走正常错误提示。
             try:
@@ -442,9 +466,10 @@ class Viewer(tk.Tk):
             while alive():
                 time.sleep(interval)
                 try:
+                    # ROI 取 UI 当前值：预览里拖拽题目/选项框立即对识别生效
                     img, _ = screen.capture(source)
-                    q_crop = screen.crop_region(img, q_roi)
-                    o_crop = screen.crop_region(img, o_roi)
+                    q_crop = screen.crop_region(img, self._roi)
+                    o_crop = screen.crop_region(img, self._option_roi)
                 except Exception as exc:
                     self._result_queue.put(("error", f"截图失败: {exc}"))
                     continue
@@ -567,7 +592,7 @@ class Viewer(tk.Tk):
         if self.bank is not None:
             self.bank.add(self._last_question, text)
         try:
-            with open(self.bank_path, encoding="utf-8") as f:
+            with open(self.bank_path, encoding="utf-8-sig") as f:
                 data = json.load(f)
             hit = next((item for item in data if item.get("question") == self._last_question), None)
             if hit is None:
