@@ -28,3 +28,4 @@ pipeline_test*.txt
 *.log
 captures/
 .DS_Store
+icons.json 

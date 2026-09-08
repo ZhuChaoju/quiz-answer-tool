@@ -19,6 +19,13 @@ PREVIEW_WIDTH = 900  # 预览显示宽度（像素），后台缩放降低主线
 PREVIEW_FPS = 30  # 30fps 足够"同步"观感，且给 OCR 线程留出 CPU
 OCR_ANSWER_COLOR = "#ff4040"
 
+# 活动模式：科举=文字题走题库匹配；看图说话=图标 dHash 走图标库匹配
+ACTIVITIES = {"keju": "科举文字题", "picture": "看图说话"}
+_PICTURE_DEFAULT = {  # 看图说话默认 ROI（1024x768 布局：居中技能图标本体 + 下方四选项）
+    "icon_roi": {"x": 43.5, "y": 36.5, "w": 13.0, "h": 13.0},
+    "option_roi": {"x": 25.0, "y": 60.0, "w": 55.0, "h": 18.0},
+}
+
 
 def _dhash(img: Image.Image) -> int:
     """8x8 感知哈希：ROI 画面是否变化的快速判据（毫秒级）。"""
@@ -32,6 +39,19 @@ def _dhash(img: Image.Image) -> int:
     return bits
 
 
+def _icon_hash(img: Image.Image) -> str:
+    """图标 256 位哈希（17x16 梯度）：比 8x8 dHash 细节多一个数量级，
+    用于看图说话的图标库匹配（同图标渲染一致距离为 0，不同图标距离远大于阈值）。"""
+    g = img.convert("L").resize((17, 16), Image.BILINEAR)
+    px = list(g.getdata())
+    bits = 0
+    for y in range(16):
+        row = y * 17
+        for x in range(16):
+            bits = (bits << 1) | int(px[row + x] < px[row + x + 1])
+    return f"{bits:064x}"
+
+
 class Viewer(tk.Tk):
     """窗口 2：预览 + ROI + 答案红框 + 录入。"""
 
@@ -41,6 +61,15 @@ class Viewer(tk.Tk):
         self.cfg = cfg
         self.bank = bank
         self.bank_path = bank_path
+        self._icons_path = "icons.json"
+        try:
+            self._icons = matcher.IconBank.load(self._icons_path)
+        except Exception:
+            self._icons = matcher.IconBank([])
+        self._last_icon_hash: int | None = None
+        self._activity = cfg.get("activity", "keju")
+        if self._activity not in ACTIVITIES:
+            self._activity = "keju"
         self._result_queue: queue.Queue = queue.Queue()
         self._preview_queue: queue.Queue = queue.Queue(maxsize=1)  # 只留最新帧，避免预览滞后
         self._running = False
@@ -49,9 +78,18 @@ class Viewer(tk.Tk):
         self._ocr_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
         self._source = tk.StringVar()
-        # 绿框=题目区、蓝框=选项区:与 OCR 实际使用的 ROI 同源,拖拽实时生效
-        self._roi = dict(cfg.get("question_roi", {"x": 10, "y": 10, "w": 80, "h": 30}))
-        self._option_roi = dict(cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0}))
+        # 绿框=题目区(科举)或图标区(看图说话)、蓝框=选项区:与识别实际使用的 ROI 同源,拖拽实时生效
+        pic = dict(cfg.get("picture", _PICTURE_DEFAULT), **{
+            k: v for k, v in _PICTURE_DEFAULT.items() if k not in cfg.get("picture", {})
+        })
+        self._picture_rois = (dict(pic["icon_roi"]), dict(pic["option_roi"]))
+        self._keju_rois = (
+            dict(cfg.get("question_roi", {"x": 10, "y": 10, "w": 80, "h": 30})),
+            dict(cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0})),
+        )
+        q0, o0 = self._picture_rois if self._activity == "picture" else self._keju_rois
+        self._roi = dict(q0)
+        self._option_roi = dict(o0)
         self._img: Image.Image | None = None
         self._full_size: tuple[int, int] | None = None  # 原始截图尺寸（OCR 坐标基准）
         # canvas item 常驻复用：每帧只更新图像与坐标，不 delete/all 重建（Tk 重建开销大）
@@ -80,6 +118,13 @@ class Viewer(tk.Tk):
     def _build_ui(self) -> None:
         top = ttk.Frame(self, padding=6)
         top.pack(fill="x")
+        ttk.Label(top, text="活动:").pack(side="left")
+        self._activity_box = ttk.Combobox(
+            top, state="readonly", width=10, values=list(ACTIVITIES.values())
+        )
+        self._activity_box.current(list(ACTIVITIES).index(self._activity))
+        self._activity_box.pack(side="left", padx=(6, 14))
+        self._activity_box.bind("<<ComboboxSelected>>", self._on_activity_changed)
         ttk.Label(top, text="画面来源:").pack(side="left")
         self._source_box = ttk.Combobox(top, state="readonly", width=42, textvariable=self._source)
         self._source_box.pack(side="left", padx=6)
@@ -162,6 +207,17 @@ class Viewer(tk.Tk):
     def _set_text(widget: tk.Text, text: str) -> None:
         widget.delete("1.0", "end")
         widget.insert("1.0", text)
+
+    # ---- 活动切换：科举(题库文字匹配) / 看图说话(图标哈希匹配) ----
+    def _on_activity_changed(self, _event) -> None:
+        names = list(ACTIVITIES)
+        self._activity = names[self._activity_box.current()]
+        q0, o0 = self._picture_rois if self._activity == "picture" else self._keju_rois
+        self._roi = dict(q0)
+        self._option_roi = dict(o0)
+        self._last_icon_hash = None
+        self._draw_roi()
+        self._update_roi_label()
 
     # ---- 来源管理 ----
     def _reload_sources(self) -> None:
@@ -478,11 +534,25 @@ class Viewer(tk.Tk):
                     continue
                 last_hash = cur_hash
                 try:
-                    # 题目/选项双引擎并行识别（第二个引擎实例互不阻塞）
                     mt = ocr_cfg.get("model_type", "tiny")
                     lang = ocr_cfg.get("lang", "ch")
                     conf = ocr_cfg.get("confidence", 0.6)
                     dml = ocr_cfg.get("use_dml", False)
+                    if self._activity == "picture":
+                        # 看图说话：图标哈希定答案，选项区 OCR 仅用于红框定位
+                        ih = _icon_hash(q_crop)
+                        self._last_icon_hash = ih
+                        answer = self._icons.match(ih) if self._icons else None
+                        fo = self._ocr_executor.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml)
+                        o_lines = [ln for ln in fo.result() if not self._is_ui_noise(ln.text)]
+                        answer_line = self._find_answer_line(o_lines, answer) if answer else None
+                        self._result_queue.put((
+                            "result", o_lines,
+                            {"question": f"看图识别: {answer}" if answer else "看图识别: 图标未收录,请在下方录入答案"},
+                            answer or "", answer_line,
+                        ))
+                        continue
+                    # 题目/选项双引擎并行识别（第二个引擎实例互不阻塞）
                     fq = self._ocr_executor.submit(ocr.recognize, q_crop, lang, conf, mt, False, dml)
                     fo = self._ocr_executor.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml)
                     q_lines = fq.result()
@@ -584,10 +654,24 @@ class Viewer(tk.Tk):
             return idx / max(len(line.text), 1), (idx + len(part)) / max(len(line.text), 1)
         return 0.0, 1.0
 
-    # ---- 答案录入（收录到题库） ----
+    # ---- 答案录入（收录到题库 / 图标库） ----
     def _add_answer(self) -> None:
         text = self._entry_var.get().strip()
-        if not text or not self._last_question:
+        if not text:
+            return
+        if self._activity == "picture" and self._last_icon_hash is not None:
+            # 看图说话：答案连同当前图标哈希写入 icons.json
+            if self._icons is not None:
+                self._icons.add(self._last_icon_hash, text)
+                try:
+                    self._icons.save(self._icons_path)
+                except OSError as exc:
+                    self._set_text(self._a_text, f"写入图标库失败: {exc}")
+                    return
+            self._set_text(self._a_text, f"已收录图标: {text}（{len(self._icons or [])} 个）")
+            self._entry_var.set("")
+            return
+        if not self._last_question:
             return
         if self.bank is not None:
             self.bank.add(self._last_question, text)
