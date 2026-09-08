@@ -11,6 +11,7 @@
     <Compile Include="..\QuizAnswerTool\Core\*.cs" />
     <PackageReference Include="RapidOcrNet" Version="3.0.0" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <!-- ORT 1.27 自带 DirectML EP，无需独立 DirectML 包 -->
   </ItemGroup>
 
 </Project>

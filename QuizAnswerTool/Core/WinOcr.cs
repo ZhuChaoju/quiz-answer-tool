@@ -4,7 +4,10 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
+using Microsoft.ML.OnnxRuntime;
 using RapidOcrNet;
+using SkiaSharp;
 
 namespace QuizAnswerTool.Core;
 
@@ -20,31 +23,64 @@ public sealed class OcrLine
     public List<(string Text, double Left, double Right)> Segments { get; init; } = new();
 }
 
-/// <summary>RapidOcrNet 引擎封装：PP-OCRv6 small 多语言模型，中文识别精准、CPU 可控。</summary>
+/// <summary>RapidOcrNet 引擎封装：PP-OCRv6 模型（默认 tiny），纯内存识别，可选 DirectML GPU。</summary>
 public static class WinOcr
 {
     private static RapidOcr? _engine;
     private static RapidOcr? _engine2;  // 第二个引擎实例：题目/选项并行识别
     private static readonly object _lock = new();
 
-    public static void EnsureEngine(string modelDir)
+    public static void EnsureEngine(string modelDir, string modelType = "tiny", bool useDml = false)
     {
         if (_engine != null) return;
         lock (_lock)
         {
             if (_engine != null) return;
-            var det = FindModel(modelDir, "v6", "PP-OCRv6_det_small.onnx");
-            var cls = FindModel(modelDir, "v6", "cls.onnx");
-            var rec = FindModel(modelDir, "v6", "PP-OCRv6_rec_small.onnx");
-            var keys = FindModel(modelDir, "v6", "ppocrv6_dict.txt");
+            // 模型集候选：配置优先，缺文件时按 tiny→small→medium 回退（tiny 用独立字典）
+            var candidates = new (string Type, string Det, string Rec, string Keys)[]
+            {
+                ("tiny",   "PP-OCRv6_det_tiny.onnx",   "PP-OCRv6_rec_tiny.onnx",   "ppocrv6_tiny_dict.txt"),
+                ("small",  "PP-OCRv6_det_small.onnx",  "PP-OCRv6_rec_small.onnx",  "ppocrv6_dict.txt"),
+                ("medium", "PP-OCRv6_det_medium.onnx", "PP-OCRv6_rec_medium.onnx", "ppocrv6_dict.txt"),
+            };
+            var ordered = candidates.Where(c => c.Type == modelType)
+                .Concat(candidates.Where(c => c.Type != modelType));
+            string? det = null, rec = null, keys = null;
+            foreach (var c in ordered)
+            {
+                det = FindModel(modelDir, "v6", c.Det);
+                rec = FindModel(modelDir, "v6", c.Rec);
+                keys = FindModel(modelDir, "v6", c.Keys);
+                if (det != null && rec != null && keys != null) break;
+            }
             if (det == null || rec == null || keys == null)
-                throw new InvalidOperationException("RapidOCR v6 模型缺失，请将模型文件放到程序目录 models/v6/");
+                throw new InvalidOperationException(
+                    "RapidOCR v6 模型缺失，请将 det/rec onnx 与字典放到程序目录 models/v6/"
+                    + "（tiny 需要 ppocrv6_tiny_dict.txt，small/medium 用 ppocrv6_dict.txt）");
+            var cls = FindModel(modelDir, "v6", "cls.onnx") ?? "";
+
+            // 主引擎留 2 核给系统/预览/第二引擎；use_dml 需引用 Microsoft.ML.OnnxRuntime.DirectML 包
+            int mainThreads = Math.Max(2, Environment.ProcessorCount - 2);
             var ocr = new RapidOcr();
-            ocr.InitModels(det, cls ?? "", rec, keys, numThread: 4);
+            InitEngine(ocr, det, cls, rec, keys, useDml, mainThreads);
             _engine = ocr;
             var ocr2 = new RapidOcr();
-            ocr2.InitModels(det, cls ?? "", rec, keys, numThread: 2);
+            InitEngine(ocr2, det, cls, rec, keys, useDml, 2);
             _engine2 = ocr2;
+        }
+    }
+
+    private static void InitEngine(RapidOcr ocr, string det, string cls, string rec, string keys, bool useDml, int numThread)
+    {
+        if (useDml)
+        {
+            using var op = new SessionOptions();
+            op.AppendExecutionProvider_DML();
+            ocr.InitModels(det, cls, rec, keys, op);
+        }
+        else
+        {
+            ocr.InitModels(det, cls, rec, keys, numThread);
         }
     }
 
@@ -58,16 +94,18 @@ public static class WinOcr
         return null;
     }
 
-    public static List<OcrLine> Recognize(string imagePath, double minConfidence = 0.0)
-        => RecognizeInternal(imagePath, _engine ?? throw new InvalidOperationException("引擎未初始化"));
+    /// <summary>识别 Bitmap（纯内存，不再经临时 PNG 落盘）。</summary>
+    public static List<OcrLine> Recognize(Bitmap bmp)
+        => RecognizeInternal(bmp, _engine ?? throw new InvalidOperationException("引擎未初始化"));
 
     /// <summary>用第二引擎识别（与 Recognize 可并行调用）。</summary>
-    public static List<OcrLine> RecognizeParallel(string imagePath, double minConfidence = 0.0)
-        => RecognizeInternal(imagePath, _engine2 ?? _engine ?? throw new InvalidOperationException("引擎未初始化"));
+    public static List<OcrLine> RecognizeParallel(Bitmap bmp)
+        => RecognizeInternal(bmp, _engine2 ?? _engine ?? throw new InvalidOperationException("引擎未初始化"));
 
-    private static List<OcrLine> RecognizeInternal(string imagePath, RapidOcr engine)
+    private static List<OcrLine> RecognizeInternal(Bitmap bmp, RapidOcr engine)
     {
-        var result = engine.Detect(imagePath, RapidOcrOptions.PPOCRv6);
+        using var src = ToSkBitmap(bmp);
+        var result = engine.Detect(src, RapidOcrOptions.PPOCRv6);
         var lines = new List<OcrLine>();
         foreach (var block in result.TextBlocks)
         {
@@ -91,18 +129,20 @@ public static class WinOcr
         return lines;
     }
 
-    /// <summary>Bitmap 重载：保存临时文件后识别。</summary>
-    public static List<OcrLine> Recognize(Bitmap bmp, string tmpDir, double minConfidence = 0.0)
-        => RecognizeFile(bmp, tmpDir, "ocr_tmp.png", parallel: false, minConfidence);
-
-    /// <summary>Bitmap 并行重载：题目/选项可同时识别。</summary>
-    public static List<OcrLine> RecognizeParallel(Bitmap bmp, string tmpDir, double minConfidence = 0.0)
-        => RecognizeFile(bmp, tmpDir, "ocr_tmp_p.png", parallel: true, minConfidence);
-
-    private static List<OcrLine> RecognizeFile(Bitmap bmp, string tmpDir, string name, bool parallel, double minConfidence)
+    /// <summary>System.Drawing.Bitmap → SKBitmap：Format32bppArgb 内存布局即 BGRA，与 Bgra8888/Unpremul
+    /// 逐字节一致，整块拷贝（替代原 PNG 编码落盘+重新解码的往返）。</summary>
+    private static SKBitmap ToSkBitmap(Bitmap bmp)
     {
-        var tmp = Path.Combine(tmpDir, name);
-        bmp.Save(tmp, ImageFormat.Png);
-        return parallel ? RecognizeParallel(tmp, minConfidence) : Recognize(tmp, minConfidence);
+        var sk = new SKBitmap(bmp.Width, bmp.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        var bd = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
+            ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            var buffer = new byte[bd.Stride * bmp.Height];
+            Marshal.Copy(bd.Scan0, buffer, 0, buffer.Length);
+            Marshal.Copy(buffer, 0, sk.GetPixels(), buffer.Length);
+        }
+        finally { bmp.UnlockBits(bd); }
+        return sk;
     }
 }

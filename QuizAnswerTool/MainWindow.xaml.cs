@@ -36,6 +36,14 @@ public partial class MainWindow : Window
     private System.Drawing.Size _fullSize;
     private string _tmpDir = "";
 
+    // 预览元素常驻复用：每帧只更新像素与坐标，不重建子元素
+    private const int PreviewFps = 30;
+    private System.Windows.Controls.Image? _previewImage;
+    private System.Windows.Shapes.Rectangle? _qZoneRect;
+    private System.Windows.Shapes.Rectangle? _oZoneRect;
+    private System.Windows.Shapes.Rectangle? _answerRect;
+    private WriteableBitmap? _previewBitmap;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -60,7 +68,7 @@ public partial class MainWindow : Window
         _questionsPath = questionsPath;
         try { _bank = QuestionBank.Load(questionsPath); StatusText.Text = $"题库已加载 {_bank.Count} 题"; }
         catch (Exception ex) { StatusText.Text = $"题库加载失败: {ex.Message}"; }
-        try { WinOcr.EnsureEngine(baseDir); }
+        try { WinOcr.EnsureEngine(baseDir, _cfg.ModelType, _cfg.UseDml); }
         catch (Exception ex) { StatusText.Text = $"OCR引擎初始化失败: {ex.Message}"; }
 
         RefreshSources();
@@ -103,7 +111,9 @@ public partial class MainWindow : Window
         _cts = new CancellationTokenSource();
         StartBtn.Content = "停止";
         StatusText.Text = "运行中…";
-        _ = Task.Run(() => RecognitionLoop(source, _cts.Token));
+        var token = _cts.Token;
+        _ = Task.Run(() => PreviewLoop(source, token));
+        _ = Task.Run(() => RecognitionLoop(source, token));
     }
 
     private void RecognitionLoop(ScreenSource source, CancellationToken ct)
@@ -112,73 +122,74 @@ public partial class MainWindow : Window
         void Log(string msg) { try { File.AppendAllText(log, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch { } }
         Log($"识别循环启动, source={source.Name}");
         string? lastKey = null;
-        ulong lastStamp = 0;
-        long previewTick = 0;
+        string? lastHash = null;
         while (!ct.IsCancellationRequested)
         {
             Thread.Sleep((int)(_cfg.IntervalSec * 1000));
             try
             {
                 var (full, rect) = ScreenCapture.Capture(source);
-                _fullSize = full.Size;
-                var qRect = ScreenCapture.CropRegion(rect, _cfg.QuestionRoi.X, _cfg.QuestionRoi.Y, _cfg.QuestionRoi.W, _cfg.QuestionRoi.H);
-                var oRect = ScreenCapture.CropRegion(rect, _cfg.OptionRoi.X, _cfg.OptionRoi.Y, _cfg.OptionRoi.W, _cfg.OptionRoi.H);
-
-                long now = Environment.TickCount64;
-                if (now - previewTick > 500)
+                using (full)
                 {
-                    previewTick = now;
-                    var (preview, thumbScale) = MakePreview(full, rect);
-                    Dispatcher.Invoke(() => DrawPreview(preview, thumbScale));
-                    preview.Dispose();
-                }
+                    _fullSize = full.Size;
+                    var qRect = ScreenCapture.CropRegion(rect, _cfg.QuestionRoi.X, _cfg.QuestionRoi.Y, _cfg.QuestionRoi.W, _cfg.QuestionRoi.H);
+                    var oRect = ScreenCapture.CropRegion(rect, _cfg.OptionRoi.X, _cfg.OptionRoi.Y, _cfg.OptionRoi.W, _cfg.OptionRoi.H);
 
-                using (var qBmp = Crop(full, qRect))
-                {
-                    var qLines = WinOcr.Recognize(qBmp, _tmpDir);
-                    qLines = qLines.Where(ln => !IsUiNoise(ln.Text)).ToList();
-                    if (qLines.Count == 0) { continue; }
-                    qLines.Sort((a, b) => a.CenterY.CompareTo(b.CenterY));
-                    string qText = string.Join("", qLines.Select(ln => ln.Text));
-                    // 非答题场景：识别到的都是玩家名等噪声，内容极短则跳过（题目至少 5 字）
-                    if (qText.Length < 5) { continue; }
-                    var key = string.Join("|", qLines.Take(2).Select(ln => ln.Text));
-                    if (key == lastKey) { continue; }
-                    lastKey = key;
-                    Log($"题目: {qText}");
-
-                    var question = _bank?.Match(qText);
-                    Log($"匹配: {(question != null ? question.GetValueOrDefault("answer") : "null")}");
-                    string answer = question?.GetValueOrDefault("answer")?.ToString() ?? "";
-                    string qDisplay = question?.GetValueOrDefault("question")?.ToString() ?? qText;
-
-                    using var oBmp = Crop(full, oRect);
-                    var oLines = WinOcr.RecognizeParallel(oBmp, _tmpDir)
-                        .Where(ln => !IsUiNoise(ln.Text)).ToList();
-
-                    OcrLine? answerLine = null;
-                    double left = 0, right = 1;
-                    if (!string.IsNullOrEmpty(answer))
+                    using (var qBmp = Crop(full, qRect))
+                    using (var oBmp = Crop(full, oRect))
                     {
-                        var hit = AnswerLocator.Find(oLines, answer);
-                        if (hit != null)
+                        // 感知哈希闸门：题目区画面未变则整轮跳过（毫秒级，替代原每轮无条件 OCR）
+                        string hash = ComputeHash(qBmp);
+                        if (hash == lastHash) { continue; }
+                        lastHash = hash;
+
+                        // 题目/选项双引擎并行识别（原为串行等待）
+                        var qTask = Task.Run(() => WinOcr.Recognize(qBmp));
+                        var oTask = Task.Run(() => WinOcr.RecognizeParallel(oBmp));
+                        var qLines = qTask.GetAwaiter().GetResult().Where(ln => !IsUiNoise(ln.Text)).ToList();
+                        var oLines = oTask.GetAwaiter().GetResult().Where(ln => !IsUiNoise(ln.Text)).ToList();
+                        if (qLines.Count == 0) { continue; }
+                        qLines.Sort((a, b) => a.CenterY.CompareTo(b.CenterY));
+                        string qText = string.Join("", qLines.Select(ln => ln.Text));
+                        // 非答题场景：识别到的都是玩家名等噪声，内容极短则跳过（题目至少 5 字）
+                        if (qText.Length < 5) { continue; }
+                        var key = string.Join("|", qLines.Take(2).Select(ln => ln.Text));
+                        if (key == lastKey) { continue; }
+                        lastKey = key;
+                        Log($"题目: {qText}");
+
+                        var question = _bank?.Match(qText);
+                        Log($"匹配: {(question != null ? question.GetValueOrDefault("answer") : "null")}");
+                        string answer = question?.GetValueOrDefault("answer")?.ToString() ?? "";
+                        string qDisplay = question?.GetValueOrDefault("question")?.ToString() ?? qText;
+
+                        OcrLine? answerLine = null;
+                        double left = 0, right = 1;
+                        if (!string.IsNullOrEmpty(answer))
                         {
-                            answerLine = hit.Value.Line;
-                            left = hit.Value.Left;
-                            right = hit.Value.Right;
-                            double ox = oRect.Left + answerLine.CenterX;
-                            double oy = oRect.Top + answerLine.CenterY;
-                            Dispatcher.Invoke(() => DrawAnswerBox(ox, oy, answerLine.Width, answerLine.Height, left, right, rect));
+                            var hit = AnswerLocator.Find(oLines, answer);
+                            if (hit != null)
+                            {
+                                answerLine = hit.Value.Line;
+                                left = hit.Value.Left;
+                                right = hit.Value.Right;
+                                double ox = oRect.Left + answerLine.CenterX;
+                                double oy = oRect.Top + answerLine.CenterY;
+                                Dispatcher.Invoke(() => DrawAnswerBox(ox, oy, answerLine.Width, answerLine.Height, left, right, rect));
+                            }
                         }
+                        Dispatcher.Invoke(() =>
+                        {
+                            _lastQuestion = qDisplay;
+                            QuestionText.Text = "题目: " + qDisplay;
+                            AnswerText.Text = string.IsNullOrEmpty(answer) ? "未命中" : "答案: " + answer;
+                            RawText.Text = "识别文本: " + string.Join("\n", qLines.Select(ln => ln.Text)) + "\n" +
+                                           string.Join("\n", oLines.Select(ln => ln.Text));
+                            // 未命中时隐藏旧答案框（元素常驻，不再靠整幅重绘清除）
+                            if (answerLine == null && _answerRect != null)
+                                _answerRect.Visibility = Visibility.Collapsed;
+                        });
                     }
-                    Dispatcher.Invoke(() =>
-                    {
-                        _lastQuestion = qDisplay;
-                        QuestionText.Text = "题目: " + qDisplay;
-                        AnswerText.Text = string.IsNullOrEmpty(answer) ? "未命中" : "答案: " + answer;
-                        RawText.Text = "识别文本: " + string.Join("\n", qLines.Select(ln => ln.Text)) + "\n" +
-                                       string.Join("\n", oLines.Select(ln => ln.Text));
-                    });
                 }
             }
             catch (OperationCanceledException) { break; }
@@ -270,77 +281,105 @@ public partial class MainWindow : Window
 
     // ---- UI 绘制 ----
 
-    private (System.Drawing.Bitmap Bmp, double Scale) MakePreview(System.Drawing.Bitmap full, Rectangle rect)
+    /// <summary>独立预览线程：30fps 抓屏缩略后经 WriteableBitmap 增量上屏（WPF 走 DirectX 合成，画面与游戏同步）。</summary>
+    private void PreviewLoop(ScreenSource source, CancellationToken ct)
     {
-        // 预览用缩略图（保持宽高比），避免大图 PNG 编码卡顿；红框坐标按比例换算
-        const int maxW = 800;
-        double scale = Math.Min(1.0, (double)maxW / full.Width);
-        var bmp = new System.Drawing.Bitmap(Math.Max((int)(full.Width * scale), 1), Math.Max((int)(full.Height * scale), 1));
-        using var g = Graphics.FromImage(bmp);
-        g.DrawImage(full, 0, 0, bmp.Width, bmp.Height);
-        return (bmp, scale);
+        long periodMs = 1000 / PreviewFps;
+        long lastTick = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            long now = Environment.TickCount64;
+            long wait = periodMs - (now - lastTick);
+            if (wait > 0) { Thread.Sleep((int)wait); continue; }
+            lastTick = Environment.TickCount64;
+            try
+            {
+                var (full, _) = ScreenCapture.Capture(source);
+                using (full)
+                {
+                    UpdatePreview(full);
+                }
+            }
+            catch (OperationCanceledException) { break; }
+            catch { /* 截图瞬时失败忽略，下一帧重试 */ }
+        }
     }
 
-    private void DrawPreview(System.Drawing.Bitmap bmp, double thumbScale)
+    /// <summary>缩略一帧并拷贝到 UI 线程的 WriteableBitmap（Bitmap 锁定期内完成上屏，随后在后台解锁释放）。</summary>
+    private void UpdatePreview(System.Drawing.Bitmap full)
     {
-        PreviewCanvas.Children.Clear();
-        var ms = new MemoryStream();
-        bmp.Save(ms, ImageFormat.Png);
-        ms.Position = 0;
-        var img = new BitmapImage();
-        img.BeginInit();
-        img.CacheOption = BitmapCacheOption.OnLoad;
-        img.StreamSource = ms;
-        img.EndInit();
+        const int maxW = 800;
+        double thumbScale = Math.Min(1.0, (double)maxW / full.Width);
+        int pw = Math.Max((int)(full.Width * thumbScale), 1);
+        int ph = Math.Max((int)(full.Height * thumbScale), 1);
+        using var thumb = new System.Drawing.Bitmap(pw, ph, PixelFormat.Format32bppArgb);
+        using (var g = Graphics.FromImage(thumb))
+        {
+            g.DrawImage(full, 0, 0, pw, ph);
+        }
+        var bd = thumb.LockBits(new Rectangle(0, 0, pw, ph), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+        try
+        {
+            Dispatcher.Invoke(() => DrawPreviewFrame(pw, ph, bd.Scan0, bd.Stride, thumbScale));
+        }
+        finally { thumb.UnlockBits(bd); }
+    }
 
+    private void DrawPreviewFrame(int pw, int ph, IntPtr scan0, int stride, double thumbScale)
+    {
         double cw = PreviewCanvas.ActualWidth, ch = PreviewCanvas.ActualHeight;
         if (cw <= 0 || ch <= 0) return;
-        double canvasScale = Math.Min(cw / bmp.Width, ch / bmp.Height);
-        canvasScale = Math.Min(canvasScale, 1.0);
-        double dispW = bmp.Width * canvasScale, dispH = bmp.Height * canvasScale;
+        if (_previewBitmap == null || _previewBitmap.PixelWidth != pw || _previewBitmap.PixelHeight != ph)
+        {
+            _previewBitmap = new WriteableBitmap(pw, ph, 96, 96, PixelFormats.Bgra32, null);
+            if (_previewImage == null)
+            {
+                _previewImage = new System.Windows.Controls.Image { Stretch = Stretch.Fill };
+                PreviewCanvas.Children.Add(_previewImage);
+            }
+            _previewImage.Source = _previewBitmap;
+        }
+        _previewBitmap.WritePixels(new Int32Rect(0, 0, pw, ph), scan0, stride * ph, stride);
+
+        double canvasScale = Math.Min(Math.Min(cw / pw, ch / ph), 1.0);
+        double dispW = pw * canvasScale, dispH = ph * canvasScale;
         double ox = (cw - dispW) / 2, oy = (ch - dispH) / 2;
         // 原图 → 画布总缩放 = 缩略缩放 × 画布缩放
         _previewScale = thumbScale * canvasScale;
         _previewOffset = (ox, oy);
         _previewDispSize = (dispW, dispH);
 
-        var image = new System.Windows.Controls.Image
-        {
-            Source = img,
-            Width = dispW,
-            Height = dispH,
-            Stretch = System.Windows.Media.Stretch.Fill,
-        };
-        WpfCanvas.SetLeft(image, ox);
-        WpfCanvas.SetTop(image, oy);
-        PreviewCanvas.Children.Add(image);
+        WpfCanvas.SetLeft(_previewImage, ox);
+        WpfCanvas.SetTop(_previewImage, oy);
+        _previewImage.Width = dispW;
+        _previewImage.Height = dispH;
+        UpdateZoneRect(ref _qZoneRect, _cfg.QuestionRoi, QuestionZoneColor, dispW, dispH, ox, oy);
+        UpdateZoneRect(ref _oZoneRect, _cfg.OptionRoi, OptionZoneColor, dispW, dispH, ox, oy);
+    }
 
-        void DrawZone(Roi roi, System.Windows.Media.Color color)
+    private void UpdateZoneRect(
+        ref System.Windows.Shapes.Rectangle? rect, Roi roi, System.Windows.Media.Color color,
+        double dispW, double dispH, double ox, double oy)
+    {
+        if (rect == null)
         {
-            var r = new System.Windows.Rect(
-                ox + dispW * roi.X / 100,
-                oy + dispH * roi.Y / 100,
-                dispW * roi.W / 100,
-                dispH * roi.H / 100);
-            var rect = new System.Windows.Shapes.Rectangle
+            rect = new System.Windows.Shapes.Rectangle
             {
-                Width = r.Width,
-                Height = r.Height,
                 Stroke = new SolidColorBrush(color),
                 StrokeThickness = 2,
             };
-            WpfCanvas.SetLeft(rect, r.X);
-            WpfCanvas.SetTop(rect, r.Y);
             PreviewCanvas.Children.Add(rect);
         }
-        DrawZone(_cfg.QuestionRoi, QuestionZoneColor);
-        DrawZone(_cfg.OptionRoi, OptionZoneColor);
+        rect.Width = dispW * roi.W / 100;
+        rect.Height = dispH * roi.H / 100;
+        WpfCanvas.SetLeft(rect, ox + dispW * roi.X / 100);
+        WpfCanvas.SetTop(rect, oy + dispH * roi.Y / 100);
     }
 
     private void DrawAnswerBox(double ax, double ay, double aw, double ah, double left, double right, Rectangle fullRect)
     {
-        if (PreviewCanvas.Children.Count == 0) return;
-        // 整图坐标 -> 预览画布坐标（复用 DrawPreview 计算的缩放/偏移，保证与画面完全对齐）
+        if (_previewImage == null) return;
+        // 整图坐标 -> 预览画布坐标（复用 DrawPreviewFrame 计算的缩放/偏移，保证与画面完全对齐）
         double scale = _previewScale;
         (double ox, double oy) = _previewOffset;
 
@@ -349,16 +388,20 @@ public partial class MainWindow : Window
         double x2 = ox + (ax - aw / 2 + aw * right) * scale;
         double y2 = oy + (ay + ah / 2) * scale;
 
-        var rect = new System.Windows.Shapes.Rectangle
+        if (_answerRect == null)
         {
-            Width = Math.Max(x2 - x1, 4),
-            Height = Math.Max(y2 - y1, 4),
-            Stroke = new SolidColorBrush(AnswerColor),
-            StrokeThickness = 3,
-        };
-        WpfCanvas.SetLeft(rect, x1);
-        WpfCanvas.SetTop(rect, y1);
-        PreviewCanvas.Children.Add(rect);
+            _answerRect = new System.Windows.Shapes.Rectangle
+            {
+                Stroke = new SolidColorBrush(AnswerColor),
+                StrokeThickness = 3,
+            };
+            PreviewCanvas.Children.Add(_answerRect);
+        }
+        _answerRect.Width = Math.Max(x2 - x1, 4);
+        _answerRect.Height = Math.Max(y2 - y1, 4);
+        WpfCanvas.SetLeft(_answerRect, x1);
+        WpfCanvas.SetTop(_answerRect, y1);
+        _answerRect.Visibility = Visibility.Visible;
     }
 
     private static System.Drawing.Bitmap Crop(System.Drawing.Bitmap src, Rectangle r)

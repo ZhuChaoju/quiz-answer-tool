@@ -4,26 +4,33 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using QuizAnswerTool.Core;
 using RapidOcrNet;
+using SkiaSharp;
 
 var modelDir = @"D:\work\mhxy\quiz-answer-tool-cs\VerifyOcr\bin\Debug\net8.0-windows10.0.19041.0\models";
 var bank = QuestionBank.Load(@"D:\work\mhxy\quiz-answer-tool\questions.json");
 var cfg = Config.Load(@"D:\work\mhxy\quiz-answer-tool\config.json");
 var files = Directory.GetFiles(@"C:\Users\admin\Downloads", "screenshot-20260809-*.png").OrderBy(f => f).ToList();
-var qTmp = @"C:\Users\admin\AppData\Local\Temp\opencode\q_tmp.png";
-var oTmp = @"C:\Users\admin\AppData\Local\Temp\opencode\o_tmp.png";
 
-var models = new (string Name, string Det, string Rec)[]
+// 模型档位：tiny 用独立字典 ppocrv6_tiny_dict.txt，small/medium 用 ppocrv6_dict.txt
+var models = new (string Name, string Det, string Rec, string Keys)[]
 {
-    ("v6-small", $@"{modelDir}\v6\PP-OCRv6_det_small.onnx", $@"{modelDir}\v6\PP-OCRv6_rec_small.onnx"),
-    ("v6-medium", $@"{modelDir}\v6\PP-OCRv6_det_medium.onnx", $@"{modelDir}\v6\PP-OCRv6_rec_medium.onnx"),
+    ("v6-tiny",   $@"{modelDir}\v6\PP-OCRv6_det_tiny.onnx",   $@"{modelDir}\v6\PP-OCRv6_rec_tiny.onnx",   $@"{modelDir}\v6\ppocrv6_tiny_dict.txt"),
+    ("v6-small",  $@"{modelDir}\v6\PP-OCRv6_det_small.onnx",  $@"{modelDir}\v6\PP-OCRv6_rec_small.onnx",  $@"{modelDir}\v6\ppocrv6_dict.txt"),
+    ("v6-medium", $@"{modelDir}\v6\PP-OCRv6_det_medium.onnx", $@"{modelDir}\v6\PP-OCRv6_rec_medium.onnx", $@"{modelDir}\v6\ppocrv6_dict.txt"),
 };
 
 foreach (var m in models)
 {
+    if (!File.Exists(m.Det) || !File.Exists(m.Rec) || !File.Exists(m.Keys))
+    {
+        Console.WriteLine($"{m.Name}: 模型文件缺失，跳过（{m.Det}）");
+        continue;
+    }
     using var ocr = new RapidOcr();
-    ocr.InitModels(m.Det, $@"{modelDir}\v6\cls.onnx", m.Rec, $@"{modelDir}\v6\ppocrv6_dict.txt", numThread: 4);
+    ocr.InitModels(m.Det, $@"{modelDir}\v6\cls.onnx", m.Rec, m.Keys, numThread: 4);
     int okQ = 0, okA = 0;
     var tq = new List<double>();
     var sw = new Stopwatch();
@@ -36,33 +43,52 @@ foreach (var m in models)
         var oRect = ScreenCapture.CropRegion(rect, cfg.OptionRoi.X, cfg.OptionRoi.Y, cfg.OptionRoi.W, cfg.OptionRoi.H);
         string name = Path.GetFileName(f);
         using var qBmp = full.Clone(qRect, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-        qBmp.Save(qTmp);
         sw.Restart();
-        var qRes = ocr.Detect(qTmp, RapidOcrOptions.PPOCRv6);
-        sw.Stop();
-        tq.Add(sw.Elapsed.TotalMilliseconds);
-        string qText = string.Join("", qRes.TextBlocks.Select(b => b.Text));
-        var q = bank.Match(qText);
-        if (q != null)
+        using (var qSk = ToSkBitmap(qBmp))
         {
-            okQ++;
-            var answer = q.GetValueOrDefault("answer")?.ToString() ?? "";
-            using var oBmp = full.Clone(oRect, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-            oBmp.Save(oTmp);
-            var oRes = ocr.Detect(oTmp, RapidOcrOptions.PPOCRv6);
-            var oLines = oRes.TextBlocks.Select(b => new OcrLine
+            // 纯内存识别（旧版经 PNG 落盘往返，此处计时不含那次开销）
+            var qRes = ocr.Detect(qSk, RapidOcrOptions.PPOCRv6);
+            sw.Stop();
+            tq.Add(sw.Elapsed.TotalMilliseconds);
+            string qText = string.Join("", qRes.TextBlocks.Select(b => b.Text));
+            var q = bank.Match(qText);
+            if (q != null)
             {
-                Text = b.Text,
-                CenterX = b.BoxPoints.Average(p => p.X),
-                CenterY = b.BoxPoints.Average(p => p.Y),
-                Width = Math.Abs(b.BoxPoints[0].X - b.BoxPoints[2].X),
-                Height = Math.Abs(b.BoxPoints[0].Y - b.BoxPoints[2].Y),
-            }).ToList();
-            if (AnswerLocator.Find(oLines, answer) != null) okA++;
+                okQ++;
+                var answer = q.GetValueOrDefault("answer")?.ToString() ?? "";
+                using var oBmp = full.Clone(oRect, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+                using var oSk = ToSkBitmap(oBmp);
+                var oRes = ocr.Detect(oSk, RapidOcrOptions.PPOCRv6);
+                var oLines = oRes.TextBlocks.Select(b => new OcrLine
+                {
+                    Text = b.Text,
+                    CenterX = b.BoxPoints.Average(p => p.X),
+                    CenterY = b.BoxPoints.Average(p => p.Y),
+                    Width = Math.Abs(b.BoxPoints[0].X - b.BoxPoints[2].X),
+                    Height = Math.Abs(b.BoxPoints[0].Y - b.BoxPoints[2].Y),
+                }).ToList();
+                if (AnswerLocator.Find(oLines, answer) != null) okA++;
+            }
+            else misses.Add($"{name}: {qText[..Math.Min(qText.Length, 50)]}");
         }
-        else misses.Add($"{name}: {qText[..Math.Min(qText.Length, 50)]}");
     }
     Console.WriteLine($"{m.Name}: 题目 {okQ}/{files.Count}, 答案 {okA}/{okQ}, 题目OCR均 {tq.Average():F0}ms");
     foreach (var ms in misses) Console.WriteLine("  MISS " + ms);
     Console.WriteLine();
+}
+
+/// <summary>System.Drawing.Bitmap → SKBitmap（Format32bppArgb 内存布局即 BGRA，整块拷贝）。</summary>
+static SKBitmap ToSkBitmap(Bitmap bmp)
+{
+    var sk = new SKBitmap(bmp.Width, bmp.Height, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+    var bd = bmp.LockBits(new Rectangle(0, 0, bmp.Width, bmp.Height),
+        System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+    try
+    {
+        var buffer = new byte[bd.Stride * bmp.Height];
+        Marshal.Copy(bd.Scan0, buffer, 0, buffer.Length);
+        Marshal.Copy(buffer, 0, sk.GetPixels(), buffer.Length);
+    }
+    finally { bmp.UnlockBits(bd); }
+    return sk;
 }
