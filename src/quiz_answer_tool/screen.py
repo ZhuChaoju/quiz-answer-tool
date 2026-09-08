@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 
 import mss
 from PIL import Image
+
+_local = threading.local()
+
+
+def _mss() -> mss.mss:
+    """mss 实例线程内复用：每次新建都要重新分配 GDI 资源，是高频截图卡顿的主因。"""
+    sct = getattr(_local, "sct", None)
+    if sct is None:
+        sct = mss.mss()
+        _local.sct = sct
+    return sct
 
 
 @dataclass
@@ -47,19 +59,19 @@ def list_sources() -> list[Source]:
 
 def capture(source: Source) -> tuple[Image.Image, ScreenRect]:
     """抓取来源画面，返回 (PIL.Image, 原始屏幕坐标矩形)。"""
-    with mss.mss() as sct:
-        if source.kind == "monitor":
-            mon = sct.monitors[int(source.id.split(":")[1])]
-            box = {"left": mon["left"], "top": mon["top"], "width": mon["width"], "height": mon["height"]}
-            rect = ScreenRect(box["left"], box["top"], box["width"], box["height"])
-        else:
-            import win32gui  # type: ignore
+    sct = _mss()
+    if source.kind == "monitor":
+        mon = sct.monitors[int(source.id.split(":")[1])]
+        box = {"left": mon["left"], "top": mon["top"], "width": mon["width"], "height": mon["height"]}
+        rect = ScreenRect(box["left"], box["top"], box["width"], box["height"])
+    else:
+        import win32gui  # type: ignore
 
-            hwnd = int(source.id.split(":")[1])
-            x, y, right, bottom = win32gui.GetWindowRect(hwnd)
-            rect = ScreenRect(x, y, right - x, bottom - y)
-            box = {"left": x, "top": y, "width": rect.width, "height": rect.height}
-        shot = sct.grab(box)
+        hwnd = int(source.id.split(":")[1])
+        x, y, right, bottom = win32gui.GetWindowRect(hwnd)
+        rect = ScreenRect(x, y, right - x, bottom - y)
+        box = {"left": x, "top": y, "width": rect.width, "height": rect.height}
+    shot = sct.grab(box)
     img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
     return img, rect
 

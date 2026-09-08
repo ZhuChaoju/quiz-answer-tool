@@ -16,7 +16,7 @@ from PIL import Image, ImageTk
 from . import matcher, ocr, screen
 
 PREVIEW_WIDTH = 900  # 预览显示宽度（像素），后台缩放降低主线程负载
-PREVIEW_FPS = 60
+PREVIEW_FPS = 30  # 30fps 足够"同步"观感，且给 OCR 线程留出 CPU
 OCR_ANSWER_COLOR = "#ff4040"
 
 
@@ -42,7 +42,7 @@ class Viewer(tk.Tk):
         self.bank = bank
         self.bank_path = bank_path
         self._result_queue: queue.Queue = queue.Queue()
-        self._preview_queue: queue.Queue = queue.Queue(maxsize=2)
+        self._preview_queue: queue.Queue = queue.Queue(maxsize=1)  # 只留最新帧，避免预览滞后
         self._running = False
         self._generation = 0  # 线程代际：停止+再启动时递增，让旧线程及时退出
         self._threads: list[threading.Thread] = []
@@ -53,6 +53,10 @@ class Viewer(tk.Tk):
         self._option_roi = dict(cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0}))
         self._img: Image.Image | None = None
         self._full_size: tuple[int, int] | None = None  # 原始截图尺寸（OCR 坐标基准）
+        # canvas item 常驻复用：每帧只更新图像与坐标，不 delete/all 重建（Tk 重建开销大）
+        self._img_item = None
+        self._q_roi_item = None  # 题目区绿框
+        self._o_roi_item = None  # 选项区蓝框
         self._scale = 1.0
         self._offset = (0.0, 0.0)
         self._drag = None
@@ -201,10 +205,14 @@ class Viewer(tk.Tk):
         ox = cw // 2 - disp_w // 2
         oy = ch // 2 - disp_h // 2
         self._offset = (ox, oy)
-        self._canvas.delete("all")
         photo = ImageTk.PhotoImage(img)
         self._photo = photo
-        self._canvas.create_image(ox + disp_w // 2, oy + disp_h // 2, image=photo, anchor="center")
+        cx, cy = ox + disp_w // 2, oy + disp_h // 2
+        if self._img_item is None:
+            self._img_item = self._canvas.create_image(cx, cy, image=photo, anchor="center")
+        else:
+            self._canvas.itemconfigure(self._img_item, image=photo)
+            self._canvas.coords(self._img_item, cx, cy)
         self._draw_roi()
         self._draw_answer_box()
 
@@ -216,13 +224,23 @@ class Viewer(tk.Tk):
         if self._img is None:
             return
         w, h = self._img.size
-        # 题目区（绿）+ 选项区（蓝），写死布局便于核对
-        for roi, color in ((self._roi, "#00ff00"), (self._option_roi, "#00aaff")):
+        # 题目区（绿）+ 选项区（蓝），写死布局便于核对；canvas item 复用只更新坐标
+        for attr, roi, color in (
+            ("_q_roi_item", self._roi, "#00ff00"),
+            ("_o_roi_item", self._option_roi, "#00aaff"),
+        ):
             rx, ry = roi["x"] / 100 * w, roi["y"] / 100 * h
             rw, rh = roi["w"] / 100 * w, roi["h"] / 100 * h
             x1, y1 = self._img_to_canvas(rx, ry)
             x2, y2 = self._img_to_canvas(rx + rw, ry + rh)
-            self._canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags="roi")
+            item = getattr(self, attr)
+            if item is None:
+                setattr(
+                    self, attr,
+                    self._canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=2, tags="roi"),
+                )
+            else:
+                self._canvas.coords(item, x1, y1, x2, y2)
 
     def _draw_answer_box(self) -> None:
         if self._img is None or self._answer_line is None or self._full_size is None:
@@ -404,12 +422,23 @@ class Viewer(tk.Tk):
 
         def ocr_loop() -> None:
             ocr_cfg = self.cfg.get("ocr", {})
-            interval = self.cfg.get("interval_sec", 0.2)
+            interval = self.cfg.get("interval_sec", 0.05)
             last_key: tuple | None = None
             last_hash: int | None = None
             # 写死布局（1024x768 固定）：题目区与选项区分离识别
             q_roi = self.cfg.get("question_roi", {"x": 28.0, "y": 23.0, "w": 55.0, "h": 20.0})
             o_roi = self.cfg.get("option_roi", {"x": 40.0, "y": 47.0, "w": 20.0, "h": 20.0})
+            # 引擎预热：模型加载与首次推理较慢（秒级），点「开始」时先跑空图完成，
+            # 避免第一道题多等数秒。预热失败不打断，首次真实识别会走正常错误提示。
+            try:
+                blank = Image.new("RGB", (64, 16), "white")
+                mt = ocr_cfg.get("model_type", "tiny")
+                lang = ocr_cfg.get("lang", "ch")
+                dml = ocr_cfg.get("use_dml", False)
+                ocr.recognize(blank, lang, 0.6, mt, False, dml)
+                ocr.recognize(blank, lang, 0.6, mt, True, dml)
+            except Exception:
+                pass
             while alive():
                 time.sleep(interval)
                 try:

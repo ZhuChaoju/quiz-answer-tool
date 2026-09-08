@@ -17,7 +17,7 @@ Windows 桌面答题识别辅助工具：选定窗口或屏幕 → 实时预览 
 
 ## 功能
 
-- **实时预览**：窗口 2 以 60fps 显示所选窗口/屏幕画面
+- **实时预览**：窗口 2 以 30fps 显示所选窗口/屏幕画面（增量渲染，不与识别抢 CPU）
 - **ROI 框选**：预览上拖拽绿色框，框内区域即识别范围（移动/缩放/重画，百分比坐标自适应分辨率）
 - **快速识别**：RapidOCR PP-OCRv6 模型（onnx 推理）识别 ROI 内文本，约 0.2s 出结果；题目未变化时自动跳过识别（零开销）
 - **答案红框**：命中时在预览画面上用红框标出答案所在行
@@ -100,14 +100,14 @@ python tools/keju_to_questions.py keju_tiku.txt -o questions.json
 
 ```json
 {
-  "interval_sec": 0.2,
+  "interval_sec": 0.05,
   "question_roi": {"x": 28.0, "y": 23.0, "w": 55.0, "h": 24.0},
   "option_roi": {"x": 25.0, "y": 44.0, "w": 70.0, "h": 24.0},
   "ocr": {"lang": "ch", "confidence": 0.4, "model_type": "tiny", "use_dml": false}
 }
 ```
 
-- `interval_sec`：画面检测间隔（秒）。题目画面变化时才触发 OCR，变化后约 0.2s 内出答案
+- `interval_sec`：画面检测间隔（秒）。有感知哈希闸门，画面未变化时只做轻量比对、零 OCR 开销，间隔小即可更快发现新题
 - `question_roi` / `option_roi`：题目区与选项区（占画面百分比），也可在预览中拖拽调整
 - `ocr.model_type`：OCR 模型档位 `tiny`（默认，实测 62 张截图命中率最高且最快 ~180ms）/ `small`（均衡 ~350ms）/ `medium`（最准但约 1.5s+）
 - `ocr.use_dml`：Windows 上启用 DirectML GPU 推理（需 `pip install onnxruntime-directml`），有独立显卡时识别可再快数倍

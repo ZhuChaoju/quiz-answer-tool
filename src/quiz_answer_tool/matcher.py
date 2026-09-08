@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import re
-from difflib import SequenceMatcher
 from typing import Any
+
+from rapidfuzz import fuzz, process
 
 FULLWIDTH = str.maketrans(
     "０１２３４５６７８９ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ（）：，。！？",
@@ -26,6 +27,7 @@ class QuestionBank:
         self._index: list[tuple[str, dict]] = [
             (normalize(q.get("question", "")), q) for q in questions
         ]
+        self._keys = [k for k, _ in self._index]
 
     @classmethod
     def load(cls, path: str) -> "QuestionBank":
@@ -43,6 +45,7 @@ class QuestionBank:
         q = {"id": len(self._raw) + 1, "question": question, "options": [], "answer": answer}
         self._raw.append(q)
         self._index.append((key, q))
+        self._keys.append(key)
 
     def __len__(self) -> int:
         return len(self._raw)
@@ -58,11 +61,8 @@ class QuestionBank:
         for normalized, q in self._index:
             if normalized in key or key in normalized:
                 return q
-        best, best_ratio = None, 0.0
-        for normalized, q in self._index:
-            ratio = SequenceMatcher(None, key, normalized).ratio()
-            if ratio > best_ratio:
-                best, best_ratio = q, ratio
-        if best and best_ratio >= 0.85:
-            return best
+        # rapidfuzz（C++ 实现）：全库模糊扫描比 difflib 快两个数量级
+        hit = process.extractOne(key, self._keys, scorer=fuzz.ratio, score_cutoff=85)
+        if hit is not None:
+            return self._index[hit[2]][1]
         return None
