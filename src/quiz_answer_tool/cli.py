@@ -31,7 +31,8 @@ def _enable_dpi_awareness() -> None:
 
 def _load_config(path: str) -> dict:
     try:
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig:兼容记事本/PowerShell 保存的带 BOM 配置(严格 utf-8 会解码失败)
+        with open(path, encoding="utf-8-sig") as f:
             return json.load(f)
     except FileNotFoundError:
         print(

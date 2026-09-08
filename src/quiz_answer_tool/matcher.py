@@ -31,7 +31,8 @@ class QuestionBank:
 
     @classmethod
     def load(cls, path: str) -> "QuestionBank":
-        with open(path, encoding="utf-8") as f:
+        # utf-8-sig:兼容带 BOM 的题库文件(记事本保存常见)
+        with open(path, encoding="utf-8-sig") as f:
             data = json.load(f)
         return cls(data)
 
