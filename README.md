@@ -27,8 +27,13 @@ Windows 桌面答题识别辅助工具：选定窗口或屏幕 → 实时预览 
 ## 安装
 
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+.venv\Scripts\pip install -r requirements.txt
+# 可选（推荐）：安装为可编辑包后，可在仓库根目录直接 python -m quiz_answer_tool
+.venv\Scripts\pip install -e .
 ```
+
+> 不安装 `-e .` 时，需在 `src` 目录下运行：`cd src && python -m quiz_answer_tool.cli run --questions ..\questions.json`
 
 ## 使用
 

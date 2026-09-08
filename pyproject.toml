@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quiz-answer-tool"
+version = "1.0.0"
+description = "Windows 桌面答题识别辅助工具(实时预览 + ROI 框选 + OCR + 本地题库匹配)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "rapidocr>=3.9.0",
+    "onnxruntime>=1.17.0",
+    "pywin32>=306",
+    "mss>=9.0.0",
+    "Pillow>=10.0.0",
+    "rapidfuzz>=3.0.0",
+]
+
+[project.scripts]
+quiz-answer-tool = "quiz_answer_tool.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
