@@ -21,7 +21,8 @@ if errorlevel 1 (
 echo [2/2] Building onefile exe (includes RapidOCR models, ~100MB)...
 "%PY%" -m PyInstaller --onefile --name quiz-answer-tool --windowed ^
     --paths "%ROOT%src" ^
-    --collect-all rapidocr_onnxruntime ^
+    --collect-all rapidocr ^
+    --collect-all rapidfuzz ^
     --hidden-import win32gui ^
     "%ROOT%pack_launcher.py" ^
     --distpath "%ROOT%dist" ^
