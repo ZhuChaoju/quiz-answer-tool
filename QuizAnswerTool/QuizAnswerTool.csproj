@@ -20,15 +20,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="models\v6\cls.onnx" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="models\v6\PP-OCRv6_det_tiny.onnx" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="models\v6\PP-OCRv6_rec_tiny.onnx" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="models\v6\ppocrv6_tiny_dict.txt" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="models\v6\PP-OCRv6_det_small.onnx" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="models\v6\PP-OCRv6_rec_small.onnx" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="models\v6\ppocrv6_dict.txt" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="questions.json" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="config.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 通配符包含：模型文件 git 忽略、按需手动下载（tiny/small/medium 任选），
+         目录为空或缺某档文件时构建不报错，运行时自动回退到已有档位 -->
+    <None Include="models\v6\*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- 数据文件本地存在才拷贝：新机器克隆后未准备题库/配置时构建不报错（运行时已有回退） -->
+    <None Include="questions.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('questions.json')" />
+    <None Include="config.json" CopyToOutputDirectory="PreserveNewest" Condition="Exists('config.json')" />
   </ItemGroup>
 
 </Project>
