@@ -86,7 +86,7 @@ public static class WinOcr
 
     private static string? FindModel(string baseDir, string sub, string name)
     {
-        foreach (var root in new[] { baseDir, Path.Combine(baseDir, "models"), Path.Combine(Path.GetDirectoryName(Environment.ProcessPath) ?? "", "models") })
+        foreach (var root in new[] { baseDir, Path.Combine(baseDir, "models"), Path.Combine(AppContext.BaseDirectory, "models") })
         {
             var p = Path.Combine(root, sub, name);
             if (File.Exists(p)) return p;

@@ -9,18 +9,26 @@ using QuizAnswerTool.Core;
 using RapidOcrNet;
 using SkiaSharp;
 
-var modelDir = @"D:\work\mhxy\quiz-answer-tool-cs\VerifyOcr\bin\Debug\net8.0-windows10.0.19041.0\models";
-var bank = QuestionBank.Load(@"D:\work\mhxy\quiz-answer-tool\questions.json");
-var cfg = Config.Load(@"D:\work\mhxy\quiz-answer-tool\config.json");
-var files = Directory.GetFiles(@"C:\Users\admin\Downloads", "screenshot-20260809-*.png").OrderBy(f => f).ToList();
+var root = @"D:\work\quiz-answer-tool-csharp";
+var modelDir = $@"{root}\QuizAnswerTool\models";
+var bank = QuestionBank.Load($@"{root}\questions.json");
+var cfg = Config.Load($@"{root}\config.json");
+// 图片目录可用命令行参数指定（默认合成科举题图；真实活动截图传 Downloads\截图）
+var shotDir = args.Length > 0 ? args[0] : @"D:\work\_downloads\shots";
+var files = Directory.GetFiles(shotDir, "*.png").OrderBy(f => f).ToList();
+Console.WriteLine($"模型目录: {modelDir}");
+Console.WriteLine($"截图: {files.Count} 张 来自 {shotDir}");
 
 // 模型档位：tiny 用独立字典 ppocrv6_tiny_dict.txt，small/medium 用 ppocrv6_dict.txt
-var models = new (string Name, string Det, string Rec, string Keys)[]
+// 可用第二参数只跑一档（独立进程、退出即释放，避免多引擎并存导致资源峰值）
+var tier = args.Length > 1 ? args[1] : "";
+var allModels = new (string Name, string Det, string Rec, string Keys)[]
 {
     ("v6-tiny",   $@"{modelDir}\v6\PP-OCRv6_det_tiny.onnx",   $@"{modelDir}\v6\PP-OCRv6_rec_tiny.onnx",   $@"{modelDir}\v6\ppocrv6_tiny_dict.txt"),
     ("v6-small",  $@"{modelDir}\v6\PP-OCRv6_det_small.onnx",  $@"{modelDir}\v6\PP-OCRv6_rec_small.onnx",  $@"{modelDir}\v6\ppocrv6_dict.txt"),
     ("v6-medium", $@"{modelDir}\v6\PP-OCRv6_det_medium.onnx", $@"{modelDir}\v6\PP-OCRv6_rec_medium.onnx", $@"{modelDir}\v6\ppocrv6_dict.txt"),
 };
+var models = allModels.Where(m => tier == "" || m.Name == $"v6-{tier}").ToArray();
 
 foreach (var m in models)
 {

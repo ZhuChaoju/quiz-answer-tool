@@ -50,7 +50,9 @@ public partial class MainWindow : Window
         ScreenCapture.EnableDpiAware();
 
         // 数据文件：exe 所在目录 → 工作目录 → exe 上级目录（源码运行时）→ 项目根
-        var baseDir = Path.GetDirectoryName(Environment.ProcessPath) ?? Directory.GetCurrentDirectory();
+        // AppContext.BaseDirectory：`dotnet <app>.dll` 启动时 Environment.ProcessPath 指向 dotnet.exe，
+        // 会把模型/数据文件定位到 SDK 目录；BaseDirectory 始终指向应用自身目录
+        var baseDir = AppContext.BaseDirectory;
         var candidates = new List<string> { baseDir, Directory.GetCurrentDirectory() };
         var parent = Directory.GetParent(baseDir)?.FullName;
         while (parent != null && candidates.Count < 8)
