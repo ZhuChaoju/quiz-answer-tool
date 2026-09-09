@@ -66,6 +66,8 @@ class Viewer(tk.Tk):
         self._drag = None
         self._result: ModuleResult | None = None
         self._sources: list = []
+        self._kx = 1.0  # 显示图相对整帧的像素比（预览缩放补偿）
+        self._ky = 1.0
         self._roi_only_flag = bool(ui.get("roi_only", False))  # 线程读的平铺副本（Tk 变量只在线程外读写）
 
         self._source = tk.StringVar()
@@ -317,6 +319,10 @@ class Viewer(tk.Tk):
         cw = max(self._canvas.winfo_width(), 200)
         ch = max(self._canvas.winfo_height(), 150)
         self._scale = min(cw / img.width, ch / img.height)
+        # 预览线程可能把画面缩过分辨率（PREVIEW_WIDTH），框的坐标仍是整帧像素：
+        # 记录"显示图像素 / 整帧像素"比例，画框换算时补上，否则框会整体偏移
+        self._kx = img.width / max(img_rect[2] - img_rect[0], 1.0)
+        self._ky = img.height / max(img_rect[3] - img_rect[1], 1.0)
         disp_w, disp_h = int(img.width * self._scale), int(img.height * self._scale)
         ox, oy = cw // 2 - disp_w // 2, ch // 2 - disp_h // 2
         self._offset = (ox, oy)
@@ -332,18 +338,18 @@ class Viewer(tk.Tk):
         self._draw_answer_box()
 
     def _to_display(self, fx: float, fy: float) -> tuple[float, float]:
-        """全画面像素坐标 → 画布坐标（考虑仅识别区域模式的裁剪偏移）。"""
+        """整帧像素坐标 → 画布坐标（考虑预览缩放与仅识别区域模式的裁剪偏移）。"""
         ox, oy = self._offset
         if self._img_rect is not None:
             l, t, _, _ = self._img_rect
-            return ox + (fx - l) * self._scale, oy + (fy - t) * self._scale
+            return ox + (fx - l) * self._scale * self._kx, oy + (fy - t) * self._scale * self._ky
         return ox + fx * self._scale, oy + fy * self._scale
 
     def _to_img_coord(self, cx: float, cy: float) -> tuple[float, float]:
         ox, oy = self._offset
         if self._img_rect is not None:
             l, t, _, _ = self._img_rect
-            return l + (cx - ox) / self._scale, t + (cy - oy) / self._scale
+            return l + (cx - ox) / (self._scale * self._kx), t + (cy - oy) / (self._scale * self._ky)
         return (cx - ox) / self._scale, (cy - oy) / self._scale
 
     def _draw_rois(self) -> None:
