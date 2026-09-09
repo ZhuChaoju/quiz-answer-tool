@@ -356,9 +356,13 @@ class Viewer(tk.Tk):
     def _draw_rois(self) -> None:
         if self._img is None or self._full_size is None:
             return
+        # 图标模块选项区跟随定位：有动态矩形时蓝框画实际识别区域
+        dyn = self._result.option_rect if (self._result and self._result.option_rect) else None
         for key in self._module.ROI_KEYS:
-            roi = self._module.rois[key]
-            l, t, r, b = roi.rect_px(self._full_size)
+            if key == "option" and dyn is not None:
+                l, t, r, b = map(float, dyn)
+            else:
+                l, t, r, b = self._module.rois[key].rect_px(self._full_size)
             x1, y1 = self._to_display(l, t)
             x2, y2 = self._to_display(r, b)
             color = ROI_COLORS.get(key, "#ffffff")
@@ -380,8 +384,10 @@ class Viewer(tk.Tk):
                 self._canvas.itemconfigure(item, state="hidden")
             return
         line, sx1, sx2 = self._result.answer_line
-        opt_roi = self._module.rois["option"]
-        rl, rt, rr, rb = opt_roi.rect_px(self._full_size, OPTION_PAD)
+        if self._result.option_rect is not None:
+            rl, rt = float(self._result.option_rect[0]), float(self._result.option_rect[1])
+        else:
+            rl, rt, _, _ = self._module.rois["option"].rect_px(self._full_size, OPTION_PAD)
         pad = 4.0  # 视觉上略宽于文字，接近 175dt 的按钮框观感
         x1, y1 = self._to_display(rl + sx1 - pad, rt + line.center_y - line.height / 2 - 2)
         x2, y2 = self._to_display(rl + sx2 + pad, rt + line.center_y + line.height / 2 + 2)

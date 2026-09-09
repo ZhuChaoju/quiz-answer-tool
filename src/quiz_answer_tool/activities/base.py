@@ -58,6 +58,8 @@ class ModuleResult:
     lines: list[Line] = field(default_factory=list)
     matched: dict | None = None  # 命中的题库条目/图标条目
     note: str = ""  # 额外提示（未命中等）
+    # 选项区实际使用的整图像素矩形（图标模块跟随定位时与百分比 ROI 不同）
+    option_rect: tuple[int, int, int, int] | None = None
 
 
 class BaseModule:

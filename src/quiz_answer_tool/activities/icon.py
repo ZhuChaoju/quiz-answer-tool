@@ -229,11 +229,54 @@ class IconModule(BaseModule):
     def config_path(self) -> str | None:
         return getattr(self, "_config_path", None)
 
+class IconModule(BaseModule):
+    type = "icon"
+    ROI_KEYS = ("icon", "option", "search")
+
+    # 校准基准：图标 40px 见方；选项区相对图标左上角的像素偏移
+    ICON_REF = 40
+    OPTION_OFFSET_DEFAULT = (-19, 102, 376, 226)
+
+    def __init__(self) -> None:
+        self.bank: IconBank | None = None
+        self.panel_bg = (162, 168, 210)
+        self.last_hash: str | None = None  # 未命中录入时使用
+        self.last_box: tuple[int, int, int, int] | None = None
+        self.option_offset = self.OPTION_OFFSET_DEFAULT
+
+    @classmethod
+    def from_json(cls, data: dict[str, Any], bank_dir: str) -> "IconModule":
+        mod = cls()
+        mod._base_init(data, bank_dir)
+        bg = data.get("panel_bg")
+        if isinstance(bg, list) and len(bg) == 3:
+            mod.panel_bg = tuple(int(v) for v in bg)
+        mod.option_offset = tuple(data.get("option_offset", mod.OPTION_OFFSET_DEFAULT))
+        threshold = int(data.get("threshold", DEFAULT_THRESHOLD))
+        mod.bank = IconBank.load(os.path.join(bank_dir, data.get("icon_bank", "icons.json")), threshold)
+        mod._config_path = os.path.join(bank_dir, "module.json")
+        return mod
+
+    def config_path(self) -> str | None:
+        return getattr(self, "_config_path", None)
+
+    def _option_rect_follow(self, frame: Image.Image, box: tuple[int, int, int, int]):
+        """答题框被拖动后，选项区跟随图标：按图标实际位置+固定偏移换算。"""
+        l, t, r, b = box
+        s = (r - l) / self.ICON_REF
+        dx1, dy1, dx2, dy2 = self.option_offset
+        fw, fh = frame.size
+        x1 = min(max(l + dx1 * s, 0), fw - 1)
+        y1 = min(max(t + dy1 * s, 0), fh - 1)
+        x2 = min(max(l + dx2 * s, x1 + 2), fw)
+        y2 = min(max(t + dy2 * s, y1 + 2), fh)
+        return (int(x1), int(y1), int(x2), int(y2))
+
     # ---- 识别 ----
     def recognize(self, frame: Image.Image, ocr_cfg: dict[str, Any]) -> ModuleResult:
         res = ModuleResult()
         roi_icon, roi_o, roi_s = self.rois["icon"], self.rois["option"], self.rois["search"]
-        # 1) 图标定位：连通域优先（抗对话框挪动），失败退回固定 ROI
+        # 1) 图标定位：连通域优先（抗对话框拖动），失败退回固定 ROI
         box = locate_icon(frame, roi_s.__dict__, self.panel_bg) if roi_s.w > 0 else None
         if box:
             self.last_box = box
@@ -241,8 +284,15 @@ class IconModule(BaseModule):
         else:
             self.last_box = None
             icon_crop = roi_icon.crop(frame)
-        # 2) 选项区 OCR + 哈希
-        o_crop = roi_o.crop(frame, pad=0.02)
+        # 2) 选项区：图标定位成功时按固定偏移跟随（整框拖动场景）；否则退回百分比 ROI
+        if box:
+            orect = self._option_rect_follow(frame, box)
+            res.option_rect = orect
+            o_crop = frame.crop(orect)
+        else:
+            orect = roi_o.rect_px(frame.size, 0.02)
+            res.option_rect = tuple(int(v) for v in orect)
+            o_crop = frame.crop((int(orect[0]), int(orect[1]), int(orect[2]), int(orect[3])))
         mt = ocr_cfg.get("model_type", "tiny")
         lang = ocr_cfg.get("lang", "ch")
         conf = float(ocr_cfg.get("confidence", 0.4))
