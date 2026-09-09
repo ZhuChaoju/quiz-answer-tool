@@ -28,3 +28,4 @@ live_full.png
 # Python 构建产物
 __pycache__/
 *.py[cod]
+icons.json 

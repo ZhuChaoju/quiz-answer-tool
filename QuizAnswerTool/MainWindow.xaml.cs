@@ -26,6 +26,10 @@ public partial class MainWindow : Window
 
     private readonly Config _cfg;
     private QuestionBank? _bank;
+    private IconBank _icons = new();
+    private string _iconsPath = "icons.json";
+    private string _lastIconHash = "";
+    private string _activity = "keju";   // keju=科举文字题 / picture=看图说话
     private List<ScreenSource> _sources = new();
     private CancellationTokenSource? _cts;
     private string _lastQuestion = "";
@@ -35,6 +39,16 @@ public partial class MainWindow : Window
     private (double W, double H) _previewDispSize;
     private System.Drawing.Size _fullSize;
     private string _tmpDir = "";
+    // 识别实际使用的 ROI（UI 可拖拽实时更新；后台线程按引用快照读取）
+    private Roi _qRoi = new();   // 科举=题目区 / 看图说话=图标区
+    private Roi _oRoi = new();   // 选项区（按活动独立）
+    private (Roi Q, Roi O) _kejuRois;
+    private (Roi Q, Roi O) _pictureRois;
+    private bool _dragging;
+    private string _dragTarget = "q";    // 拖的是题目框(q)还是选项框(o)
+    private string _dragMode = "move";   // move / resize / create
+    private (double X, double Y) _dragStart;   // 按下时图内坐标
+    private System.Drawing.Rectangle _dragOrig;  // 按下时框的图内像素矩形
 
     // 预览元素常驻复用：每帧只更新像素与坐标，不重建子元素
     private const int PreviewFps = 30;
@@ -68,10 +82,27 @@ public partial class MainWindow : Window
 
         _cfg = Config.Load(configPath);
         _questionsPath = questionsPath;
+        _kejuRois = (new Roi { X = _cfg.QuestionRoi.X, Y = _cfg.QuestionRoi.Y, W = _cfg.QuestionRoi.W, H = _cfg.QuestionRoi.H },
+                     new Roi { X = _cfg.OptionRoi.X, Y = _cfg.OptionRoi.Y, W = _cfg.OptionRoi.W, H = _cfg.OptionRoi.H });
+        _pictureRois = (new Roi { X = _cfg.PictureIconRoi.X, Y = _cfg.PictureIconRoi.Y, W = _cfg.PictureIconRoi.W, H = _cfg.PictureIconRoi.H },
+                        new Roi { X = _cfg.PictureOptionRoi.X, Y = _cfg.PictureOptionRoi.Y, W = _cfg.PictureOptionRoi.W, H = _cfg.PictureOptionRoi.H });
+        _activity = _cfg.Activity;
+        (_qRoi, _oRoi) = _activity == "picture" ? _pictureRois : _kejuRois;
         try { _bank = QuestionBank.Load(questionsPath); StatusText.Text = $"题库已加载 {_bank.Count} 题"; }
         catch (Exception ex) { StatusText.Text = $"题库加载失败: {ex.Message}"; }
+        // 图标库与数据文件同目录查找（与 questions.json 相同的候选链）；
+        // 尚不存在时锚定 exe 目录，避免相对路径随进程 CWD 漂移、下次启动找不到
+        var iconsPath = candidates.Select(d => Path.Combine(d, "icons.json")).FirstOrDefault(File.Exists)
+                        ?? Path.Combine(baseDir, "icons.json");
+        _iconsPath = iconsPath;
+        _icons = IconBank.Load(iconsPath);
         try { WinOcr.EnsureEngine(baseDir, _cfg.ModelType, _cfg.UseDml); }
         catch (Exception ex) { StatusText.Text = $"OCR引擎初始化失败: {ex.Message}"; }
+
+        ActivityBox.Items.Add("科举文字题");
+        ActivityBox.Items.Add("看图说话");
+        ActivityBox.SelectedIndex = _activity == "picture" ? 1 : 0;
+        UpdateRoiLabel();
 
         RefreshSources();
         // 贴屏幕右缘
@@ -80,6 +111,17 @@ public partial class MainWindow : Window
     }
 
     private void OnLoaded(object sender, RoutedEventArgs e) { }
+
+    /// <summary>活动切换：科举(题库文字匹配) / 看图说话(图标哈希匹配)，ROI 跟随切换。</summary>
+    private void OnActivityChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (ActivityBox.SelectedIndex < 0) return;
+        _activity = ActivityBox.SelectedIndex == 1 ? "picture" : "keju";
+        (_qRoi, _oRoi) = _activity == "picture" ? _pictureRois : _kejuRois;
+        _lastIconHash = "";
+        DrawZones();
+        UpdateRoiLabel();
+    }
 
     private void RefreshSources()
     {
@@ -122,7 +164,7 @@ public partial class MainWindow : Window
     {
         var log = Path.Combine(_tmpDir, "debug.log");
         void Log(string msg) { try { File.AppendAllText(log, $"{DateTime.Now:HH:mm:ss.fff} {msg}\n"); } catch { } }
-        Log($"识别循环启动, source={source.Name}");
+        Log($"识别循环启动, source={source.Name}, activity={_activity}");
         string? lastKey = null;
         string? lastHash = null;
         while (!ct.IsCancellationRequested)
@@ -134,16 +176,50 @@ public partial class MainWindow : Window
                 using (full)
                 {
                     _fullSize = full.Size;
-                    var qRect = ScreenCapture.CropRegion(rect, _cfg.QuestionRoi.X, _cfg.QuestionRoi.Y, _cfg.QuestionRoi.W, _cfg.QuestionRoi.H);
-                    var oRect = ScreenCapture.CropRegion(rect, _cfg.OptionRoi.X, _cfg.OptionRoi.Y, _cfg.OptionRoi.W, _cfg.OptionRoi.H);
+                    // ROI 取 UI 当前值：预览里拖拽题目/选项框立即对识别生效（后台线程按快照读取）
+                    var qRoi = _qRoi;
+                    var oRoi = _oRoi;
+                    var qRect = ScreenCapture.CropRegion(rect, qRoi.X, qRoi.Y, qRoi.W, qRoi.H);
+                    var oRect = ScreenCapture.CropRegion(rect, oRoi.X, oRoi.Y, oRoi.W, oRoi.H);
 
                     using (var qBmp = Crop(full, qRect))
                     using (var oBmp = Crop(full, oRect))
                     {
-                        // 感知哈希闸门：题目区画面未变则整轮跳过（毫秒级，替代原每轮无条件 OCR）
+                        // 感知哈希闸门：题目/图标区画面未变则整轮跳过（毫秒级，替代原每轮无条件 OCR）
                         string hash = ComputeHash(qBmp);
                         if (hash == lastHash) { continue; }
                         lastHash = hash;
+
+                        if (_activity == "picture")
+                        {
+                            // 看图说话：图标哈希定答案，选项区 OCR 仅用于红框定位
+                            _lastIconHash = IconBank.HashIcon(qBmp);
+                            string? iconAnswer = _icons.Match(_lastIconHash);
+                            var oLines0 = WinOcr.Recognize(oBmp).Where(ln => !IsUiNoise(ln.Text)).ToList();
+                            string display = iconAnswer != null
+                                ? $"看图识别: {iconAnswer}"
+                                : "看图识别: 图标未收录,请在下方录入答案";
+                            var hit0 = iconAnswer != null ? AnswerLocator.Find(oLines0, iconAnswer) : null;
+                            if (hit0 != null)
+                            {
+                                var l0 = hit0.Value.Line;
+                                Dispatcher.Invoke(() => DrawAnswerBox(
+                                    oRect.Left + l0.CenterX, oRect.Top + l0.CenterY,
+                                    l0.Width, l0.Height, hit0.Value.Left, hit0.Value.Right, rect));
+                            }
+                            Dispatcher.Invoke(() =>
+                            {
+                                _lastQuestion = display;
+                                QuestionText.Text = "题目: " + display;
+                                AnswerText.Text = iconAnswer != null ? "答案: " + iconAnswer : "未收录";
+                                RawText.Text = "识别文本: " + display + "\n" +
+                                               string.Join("\n", oLines0.Select(ln => ln.Text));
+                                if (hit0 == null && _answerRect != null)
+                                    _answerRect.Visibility = Visibility.Collapsed;
+                            });
+                            Log($"看图: {iconAnswer ?? "未收录"} hash={_lastIconHash}");
+                            continue;
+                        }
 
                         // 题目/选项双引擎并行识别（原为串行等待）
                         var qTask = Task.Run(() => WinOcr.Recognize(qBmp));
@@ -236,11 +312,95 @@ public partial class MainWindow : Window
     private void AddAnswer()
     {
         var text = EntryBox.Text.Trim();
-        if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(_lastQuestion) || _bank == null) return;
+        if (string.IsNullOrEmpty(text)) return;
+        if (_activity == "picture" && _lastIconHash.Length > 0)
+        {
+            // 看图说话：答案连同当前图标哈希写入 icons.json
+            _icons.Add(_lastIconHash, text);
+            try { _icons.Save(_iconsPath); }
+            catch (Exception ex) { AnswerText.Text = "写入图标库失败: " + ex.Message; return; }
+            AnswerText.Text = $"已收录图标: {text}（共 {_icons.Count} 个）";
+            EntryBox.Text = "";
+            return;
+        }
+        if (string.IsNullOrEmpty(_lastQuestion) || _bank == null) return;
         _bank.Add(_lastQuestion, text);
         SaveBankToFile(text);
         AnswerText.Text = $"已收录: {_lastQuestion} → {text}";
         EntryBox.Text = "";
+    }
+
+    // ---- ROI 拖拽（题目/图标框绿 + 选项框蓝；框内拖动、右下角缩放、空白处拖出新题目框） ----
+
+    private (double X, double Y) CanvasToImagePercent(System.Windows.Point p)
+    {
+        double fx = (p.X - _previewOffset.X) / _previewScale;
+        double fy = (p.Y - _previewOffset.Y) / _previewScale;
+        return (_fullSize.Width > 0 ? fx / _fullSize.Width * 100 : 0,
+                _fullSize.Height > 0 ? fy / _fullSize.Height * 100 : 0);
+    }
+
+    private void OnCanvasDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_fullSize.Width == 0 || _fullSize.Height == 0) return;
+        var (px, py) = CanvasToImagePercent(e.GetPosition(PreviewCanvas));
+        // 命中哪个框拖哪个（选项框判定在前：两框相邻时优先响应更小的选项框）
+        foreach (var (target, roi) in new[] { ("o", _oRoi), ("q", _qRoi) })
+        {
+            if (px >= roi.X && px <= roi.X + roi.W && py >= roi.Y && py <= roi.Y + roi.H)
+            {
+                // 右下角 14 画布像素 = 缩放手柄
+                double handleW = _fullSize.Width > 0 ? 14.0 / _previewScale / _fullSize.Width * 100 : 2;
+                double handleH = _fullSize.Height > 0 ? 14.0 / _previewScale / _fullSize.Height * 100 : 2;
+                _dragTarget = target;
+                _dragMode = px > roi.X + roi.W - handleW && py > roi.Y + roi.H - handleH ? "resize" : "move";
+                _dragStart = (px, py);
+                _dragOrig = new System.Drawing.Rectangle((int)roi.X, (int)roi.Y, (int)roi.W, (int)roi.H);
+                _dragging = true;
+                PreviewCanvas.CaptureMouse();
+                return;
+            }
+        }
+        _dragTarget = "q";
+        _dragMode = "create";
+        _dragStart = (px, py);
+        _dragOrig = new System.Drawing.Rectangle();
+        _dragging = true;
+        PreviewCanvas.CaptureMouse();
+    }
+
+    private void OnCanvasMove(object sender, MouseEventArgs e)
+    {
+        if (!_dragging) return;
+        var (px, py) = CanvasToImagePercent(e.GetPosition(PreviewCanvas));
+        double ox = _dragOrig.X, oy = _dragOrig.Y, ow = _dragOrig.Width, oh = _dragOrig.Height;
+        var (sx, sy) = _dragStart;
+        double nx, ny, nw, nh;
+        if (_dragMode == "move") { nx = ox + px - sx; ny = oy + py - sy; nw = ow; nh = oh; }
+        else if (_dragMode == "resize") { nx = ox; ny = oy; nw = px - ox; nh = py - oy; }
+        else { nx = Math.Min(sx, px); ny = Math.Min(sy, py); nw = Math.Abs(px - sx); nh = Math.Abs(py - sy); }
+        nx = Math.Max(0, Math.Min(nx, 99));
+        ny = Math.Max(0, Math.Min(ny, 99));
+        nw = Math.Max(1, Math.Min(nw, 100 - nx));
+        nh = Math.Max(1, Math.Min(nh, 100 - ny));
+        var roi = new Roi { X = nx, Y = ny, W = nw, H = nh };
+        if (_dragTarget == "o") _oRoi = roi; else _qRoi = roi;
+        DrawZones();
+        UpdateRoiLabel();
+    }
+
+    private void OnCanvasUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_dragging) return;
+        _dragging = false;
+        PreviewCanvas.ReleaseMouseCapture();
+    }
+
+    private void UpdateRoiLabel()
+    {
+        string first = _activity == "picture" ? "图标ROI" : "题目ROI";
+        RoiText.Text = $"{first}: x={_qRoi.X:F1}% y={_qRoi.Y:F1}% w={_qRoi.W:F1}% h={_qRoi.H:F1}%  " +
+                       $"选项ROI: x={_oRoi.X:F1}% y={_oRoi.Y:F1}% w={_oRoi.W:F1}% h={_oRoi.H:F1}%";
     }
 
     /// <summary>把录入的答案写回 questions.json（同题覆盖 answer，否则追加）。</summary>
@@ -283,13 +443,16 @@ public partial class MainWindow : Window
 
     // ---- UI 绘制 ----
 
-    /// <summary>独立预览线程：30fps 抓屏缩略后经 WriteableBitmap 增量上屏（WPF 走 DirectX 合成，画面与游戏同步）。</summary>
+    /// <summary>独立预览线程：30fps 抓屏缩略后经 WriteableBitmap 增量上屏（WPF 走 DirectX 合成，画面与游戏同步）。
+    /// 画面静止时（连续 3 帧像素戳相同）降频到 10fps 采样且跳过缩放/上屏，显著降低静止 CPU。</summary>
     private void PreviewLoop(ScreenSource source, CancellationToken ct)
     {
-        long periodMs = 1000 / PreviewFps;
         long lastTick = 0;
+        ulong lastStamp = 0;
+        int staticFrames = 0;
         while (!ct.IsCancellationRequested)
         {
+            long periodMs = staticFrames >= 3 ? 100 : 1000 / PreviewFps;
             long now = Environment.TickCount64;
             long wait = periodMs - (now - lastTick);
             if (wait > 0) { Thread.Sleep((int)wait); continue; }
@@ -299,6 +462,14 @@ public partial class MainWindow : Window
                 var (full, _) = ScreenCapture.Capture(source);
                 using (full)
                 {
+                    ulong stamp = PixelStamp(full);
+                    if (stamp == lastStamp)
+                    {
+                        staticFrames++;
+                        continue;
+                    }
+                    staticFrames = 0;
+                    lastStamp = stamp;
                     UpdatePreview(full);
                 }
             }
@@ -351,12 +522,22 @@ public partial class MainWindow : Window
         _previewOffset = (ox, oy);
         _previewDispSize = (dispW, dispH);
 
+        if (_previewImage == null) return;
         WpfCanvas.SetLeft(_previewImage, ox);
         WpfCanvas.SetTop(_previewImage, oy);
         _previewImage.Width = dispW;
         _previewImage.Height = dispH;
-        UpdateZoneRect(ref _qZoneRect, _cfg.QuestionRoi, QuestionZoneColor, dispW, dispH, ox, oy);
-        UpdateZoneRect(ref _oZoneRect, _cfg.OptionRoi, OptionZoneColor, dispW, dispH, ox, oy);
+        DrawZones();
+    }
+
+    /// <summary>按当前 ROI 重画题目/图标框(绿)与选项框(蓝)；拖拽与每帧渲染共用。</summary>
+    private void DrawZones()
+    {
+        var (dispW, dispH) = _previewDispSize;
+        if (dispW <= 0 || _previewImage == null) return;
+        var (ox, oy) = _previewOffset;
+        UpdateZoneRect(ref _qZoneRect, _qRoi, QuestionZoneColor, dispW, dispH, ox, oy);
+        UpdateZoneRect(ref _oZoneRect, _oRoi, OptionZoneColor, dispW, dispH, ox, oy);
     }
 
     private void UpdateZoneRect(

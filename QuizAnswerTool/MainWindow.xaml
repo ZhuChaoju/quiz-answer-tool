@@ -12,20 +12,26 @@
 
         <!-- 顶部工具栏 -->
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="8">
-            <TextBlock Text="画面来源:" VerticalAlignment="Center"/>
+            <TextBlock Text="活动:" VerticalAlignment="Center"/>
+            <ComboBox x:Name="ActivityBox" Width="110" Margin="6,0"
+                      SelectionChanged="OnActivityChanged"/>
+            <TextBlock Text="画面来源:" VerticalAlignment="Center" Margin="12,0,0,0"/>
             <ComboBox x:Name="SourceBox" Width="420" Margin="6,0"/>
             <Button x:Name="RefreshBtn" Content="刷新来源" Click="OnRefreshSources" Margin="6,0"/>
             <Button x:Name="StartBtn" Content="开始" Click="OnToggle" Margin="20,0"/>
             <TextBlock x:Name="StatusText" Text="" VerticalAlignment="Center" Margin="20,0" Foreground="#666"/>
         </StackPanel>
 
-        <!-- 预览画布 -->
+        <!-- 预览画布：拖拽题目/图标框(绿)与选项框(蓝)，空白处拖出新题目框 -->
         <Border Grid.Row="1" Background="#222" Margin="8,0">
-            <Canvas x:Name="PreviewCanvas" ClipToBounds="True"/>
+            <Canvas x:Name="PreviewCanvas" ClipToBounds="True"
+                    MouseLeftButtonDown="OnCanvasDown" MouseLeftButtonUp="OnCanvasUp"
+                    MouseMove="OnCanvasMove"/>
         </Border>
 
         <!-- 底部信息面板 -->
         <StackPanel Grid.Row="2" Margin="8">
+            <TextBlock x:Name="RoiText" Text="题目ROI: -  选项ROI: -" Foreground="#666" FontSize="11"/>
             <TextBlock x:Name="QuestionText" Text="题目: -" TextWrapping="Wrap" FontSize="13" Height="52"/>
             <TextBlock x:Name="AnswerText" Text="答案: -" TextWrapping="Wrap" FontSize="16" FontWeight="Bold"
                        Foreground="#0a0" Height="26"/>

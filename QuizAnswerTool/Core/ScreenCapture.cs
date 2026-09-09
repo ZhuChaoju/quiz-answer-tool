@@ -40,6 +40,12 @@ public static class ScreenCapture
     [DllImport("user32.dll")]
     private static extern bool GetClientRect(nint hWnd, out RECT lpRect);
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll")]
+    private static extern bool ClientToScreen(nint hWnd, ref POINT lpPoint);
+
     [DllImport("user32.dll")]
     private static extern bool SetProcessDPIAware();
 
@@ -109,16 +115,17 @@ public static class ScreenCapture
     {
         if (source.Kind == "window")
         {
-            if (!GetWindowRect(source.Hwnd, out var wrect))
-                throw new InvalidOperationException($"无法获取窗口区域 (hwnd={source.Hwnd})");
             if (!GetClientRect(source.Hwnd, out var crect))
                 throw new InvalidOperationException($"无法获取客户区 (hwnd={source.Hwnd})");
-            // 客户区屏幕坐标 = 窗口原点 + 客户区偏移（DPI 感知下为物理像素）
+            // 客户区原点的屏幕坐标：GetClientRect 的 Left/Top 恒为 0（客户坐标系），
+            // 旧写法 wrect.Top + crect.Left 实际等于窗口矩形顶（含标题栏），
+            // 导致截图像素整体下移一个标题栏高度、底部同高被裁掉
+            var origin = new POINT { X = 0, Y = 0 };
+            if (!ClientToScreen(source.Hwnd, ref origin))
+                throw new InvalidOperationException($"无法换算客户区坐标 (hwnd={source.Hwnd})");
             var rc = new Rectangle(
-                wrect.Left + crect.Left,
-                wrect.Top + crect.Top,
-                crect.Right - crect.Left,
-                crect.Bottom - crect.Top);
+                origin.X, origin.Y,
+                crect.Right - crect.Left, crect.Bottom - crect.Top);
             if (rc.Width <= 0 || rc.Height <= 0)
                 throw new InvalidOperationException("窗口尺寸无效");
             return (CaptureRegion(rc), rc);
