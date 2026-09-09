@@ -162,14 +162,11 @@ def merge_lines(lines: list[Line]) -> list[Line]:
             weights = sum(ln.center_x * ln.width for ln in group) / total_w
         else:  # 异常防护：所有段宽为 0 时退化为均值
             weights = sum(ln.center_x for ln in group) / len(group)
-        # 段坐标：每个检测框在该行内的水平占比，供红框精确定位选项
+        # 段坐标：每个检测框在该行内的绝对像素范围，供红框精确定位选项。
+        # 选项框之间有间隙，累计宽度占比会偏移，必须用检测框自身的绝对坐标。
         segments: list[tuple[str, float, float]] = []
-        acc = 0.0
         for ln in group:
-            left = acc / total_w if total_w > 0 else 0.0
-            acc += ln.width
-            right = acc / total_w if total_w > 0 else 1.0
-            segments.append((ln.text, left, right))
+            segments.append((ln.text, ln.center_x - ln.width / 2, ln.center_x + ln.width / 2))
         merged.append(
             Line(
                 text="".join(ln.text for ln in group),

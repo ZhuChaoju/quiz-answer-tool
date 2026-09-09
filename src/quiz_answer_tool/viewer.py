@@ -366,20 +366,18 @@ class Viewer(tk.Tk):
                 self._canvas.coords(item, x1, y1, x2, y2)
 
     def _draw_answer_box(self) -> None:
-        """把答案定位框画到预览上（175dt 红框样式）。"""
+        """把答案定位框画到预览上（175dt 红框样式）。答案段为选项裁剪图内绝对像素。"""
         item = self._items.get("ans")
         if self._img is None or self._result is None or self._result.answer_line is None:
             if item is not None:
                 self._canvas.itemconfigure(item, state="hidden")
             return
-        line, left, right = self._result.answer_line
+        line, sx1, sx2 = self._result.answer_line
         opt_roi = self._module.rois["option"]
         rl, rt, rr, rb = opt_roi.rect_px(self._full_size, OPTION_PAD)
-        ax = rl + line.center_x
-        ay = rt + line.center_y
-        half_w = line.width / 2
-        x1, y1 = self._to_display(ax - half_w + line.width * left, ay - line.height / 2)
-        x2, y2 = self._to_display(ax - half_w + line.width * right, ay + line.height / 2)
+        pad = 4.0  # 视觉上略宽于文字，接近 175dt 的按钮框观感
+        x1, y1 = self._to_display(rl + sx1 - pad, rt + line.center_y - line.height / 2 - 2)
+        x2, y2 = self._to_display(rl + sx2 + pad, rt + line.center_y + line.height / 2 + 2)
         if item is None:
             self._items["ans"] = self._canvas.create_rectangle(
                 x1, y1, x2, y2, outline=ANSWER_COLOR, width=3
