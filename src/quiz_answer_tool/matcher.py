@@ -1,4 +1,4 @@
-"""题库加载与三级匹配：精确 → 子串 → 模糊；图标库 dHash 汉明距离匹配(看图说话)。"""
+"""题库加载与三级匹配：精确 → 子串 → 模糊。图标库在 activities.icon。"""
 
 from __future__ import annotations
 
@@ -67,59 +67,3 @@ class QuestionBank:
         if hit is not None:
             return self._index[hit[2]][1]
         return None
-
-
-class IconBank:
-    """看图说话图标库：256 位图标哈希 → 答案，汉明距离匹配。
-
-    未命中时由用户录入答案并连同当前图标哈希入库，越用越全。
-    """
-
-    def __init__(self, entries: list[dict[str, Any]], threshold: int = 12):
-        self._entries = entries  # [{"hash": "64位hex", "answer": "龙吟"}, ...]
-        self.threshold = threshold  # 256 位哈希:同图标渲染噪声 0~2,不同内容实测 ≥27
-
-    @classmethod
-    def load(cls, path: str) -> "IconBank":
-        try:
-            with open(path, encoding="utf-8-sig") as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            data = []
-        return cls(data if isinstance(data, list) else [])
-
-    def save(self, path: str) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(self._entries, f, ensure_ascii=False, indent=1)
-
-    def __len__(self) -> int:
-        return len(self._entries)
-
-    @staticmethod
-    def _dist(a: str, b: str) -> int:
-        return bin(int(a, 16) ^ int(b, 16)).count("1")
-
-    def match(self, icon_hash: str) -> str | None:
-        """最近哈希距离 ≤ threshold 时返回其答案，否则 None。"""
-        best: tuple[int, str] | None = None
-        for e in self._entries:
-            h = str(e.get("hash", ""))
-            if not h:
-                continue
-            try:
-                d = self._dist(icon_hash, h)
-            except ValueError:
-                continue
-            if best is None or d < best[0]:
-                best = (d, str(e.get("answer", "")))
-        if best and best[0] <= self.threshold and best[1]:
-            return best[1]
-        return None
-
-    def add(self, icon_hash: str, answer: str) -> None:
-        """收录一条图标答案（同哈希已存在时更新答案）。"""
-        for e in self._entries:
-            if e.get("hash") == icon_hash:
-                e["answer"] = answer
-                return
-        self._entries.append({"hash": icon_hash, "answer": answer})

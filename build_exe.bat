@@ -11,14 +11,14 @@ if not exist "%PY%" (
     exit /b 1
 )
 
-echo [1/2] Check PyInstaller...
+echo [1/3] Check PyInstaller...
 "%PY%" -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
     echo       Installing PyInstaller...
     "%PY%" -m pip install pyinstaller
 )
 
-echo [2/2] Building onefile exe (includes RapidOCR models, ~100MB)...
+echo [2/3] Building onefile exe (includes RapidOCR models, ~100MB)...
 "%PY%" -m PyInstaller --onefile --name quiz-answer-tool --windowed ^
     --paths "%ROOT%src" ^
     --collect-all rapidocr ^
@@ -33,8 +33,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo [3/3] Assemble release folder (exe + banks + config example)...
+if not exist "%ROOT%dist\release" mkdir "%ROOT%dist\release"
+copy /y "%ROOT%dist\quiz-answer-tool.exe" "%ROOT%dist\release\" >nul
+if exist "%ROOT%dist\release\banks" rmdir /s /q "%ROOT%dist\release\banks"
+xcopy /e /i /q "%ROOT%banks" "%ROOT%dist\release\banks" >nul
+copy /y "%ROOT%config\config.example.json" "%ROOT%dist\release\config.json" >nul
+
 echo.
-echo [OK] Done: %ROOT%dist\quiz-answer-tool.exe
-echo      Ship together with config.example.json.
+echo [OK] Done:
+echo      %ROOT%dist\quiz-answer-tool.exe
+echo      %ROOT%dist\release\  (exe + banks + config, whole folder is distributable)
 echo      NOTE: exe is gitignored, never commit it.
 pause

@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 
-from .matcher import QuestionBank
+from .activities import load_modules
 from .viewer import Viewer
 
 DEFAULT_CONFIG = "config.json"
@@ -36,8 +36,7 @@ def _load_config(path: str) -> dict:
             return json.load(f)
     except FileNotFoundError:
         print(
-            f"配置文件 {path} 不存在，使用默认配置；"
-            f"可从 config/config.example.json 复制一份。",
+            f"配置文件 {path} 不存在，使用默认配置；可从 config/config.example.json 复制一份。",
             file=sys.stderr,
         )
         return {}
@@ -56,18 +55,16 @@ def _resolve_path(path: str) -> str:
 
 def cmd_run(args: argparse.Namespace) -> None:
     args.config = _resolve_path(args.config)
-    args.questions = _resolve_path(args.questions)
     cfg = _load_config(args.config)
-    try:
-        bank = QuestionBank.load(args.questions)
-    except FileNotFoundError:
+    banks_dir = _resolve_path(args.banks)
+    modules = load_modules(banks_dir)
+    if not modules:
         print(
-            f"题库文件 {args.questions} 不存在；"
-            f"可用 tools/keju_to_questions.py 从题库文本生成。",
+            f"在 {banks_dir} 未找到任何活动模块；请把 banks 目录与 exe 放在一起（或源码根目录运行）。",
             file=sys.stderr,
         )
-        bank = None
-    app = Viewer(cfg, bank, bank_path=args.questions)
+        raise SystemExit(1)
+    app = Viewer(cfg, modules, config_path=args.config)
     app.mainloop()
 
 
@@ -79,7 +76,7 @@ def main() -> None:
 
     p_run = sub.add_parser("run", help="open the live recognition window")
     p_run.add_argument("--config", default=DEFAULT_CONFIG)
-    p_run.add_argument("--questions", default="questions.json")
+    p_run.add_argument("--banks", default="banks")
     p_run.set_defaults(func=cmd_run)
 
     args = parser.parse_args()
@@ -87,7 +84,7 @@ def main() -> None:
         args.debug = False
         args.func = cmd_run
         args.config = DEFAULT_CONFIG
-        args.questions = "questions.json"
+        args.banks = "banks"
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format="%(asctime)s %(name)s %(levelname)s %(message)s",

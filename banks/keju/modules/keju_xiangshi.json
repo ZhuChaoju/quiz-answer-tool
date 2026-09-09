@@ -1,0 +1,13 @@
+{
+  "id": "keju_xiangshi",
+  "name": "科举·乡试",
+  "type": "text",
+  "bank": "questions.json",
+  "question_anchor": "题目\\s*[:：]?",
+  "noise": ["请指点迷津", "使用法宝"],
+  "roi": {
+    "question": { "x": 25.0, "y": 18.0, "w": 55.0, "h": 32.0 },
+    "option": { "x": 25.0, "y": 52.0, "w": 55.0, "h": 30.0 }
+  },
+  "locked": false
+}

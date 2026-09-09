@@ -1,0 +1,13 @@
+{
+  "id": "keju_huishi",
+  "name": "科举·会试",
+  "type": "text",
+  "bank": "questions.json",
+  "question_anchor": "题目\\s*[:：]",
+  "noise": ["这一关考的是", "请指点迷津", "使用法宝"],
+  "roi": {
+    "question": { "x": 33.5, "y": 14.0, "w": 61.0, "h": 36.0 },
+    "option": { "x": 33.5, "y": 55.5, "w": 62.0, "h": 32.0 }
+  },
+  "locked": true
+}

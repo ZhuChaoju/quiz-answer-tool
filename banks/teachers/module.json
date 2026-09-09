@@ -1,0 +1,14 @@
+{
+  "id": "teachers",
+  "name": "教师节·看图说话",
+  "type": "icon",
+  "icon_bank": "icons.json",
+  "panel_bg": [162, 168, 210],
+  "threshold": 84,
+  "roi": {
+    "icon": { "x": 40.3, "y": 33.3, "w": 5.3, "h": 7.0 },
+    "search": { "x": 36.0, "y": 28.0, "w": 16.0, "h": 24.0 },
+    "option": { "x": 38.5, "y": 46.5, "w": 40.0, "h": 18.0 }
+  },
+  "locked": true
+}
