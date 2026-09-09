@@ -70,10 +70,14 @@ def main() -> None:
     os.makedirs(tmp, exist_ok=True)
     passed = failed = 0
 
-    # ---- 1) 科举·会试：真实网图 ----
+    # ---- 1) 科举·会试：真实网图（对话框裁出居中贴到 1036x831 实测窗口尺寸） ----
     huishi_img = r"D:\work\_downloads\keju_huishi_web.jpg"
+    web = Image.open(huishi_img).convert("RGB")
+    dlg = web.crop((420, 25, 1290, 830))  # 网图中的会试对话框 870x805（固定像素大小）
+    live = Image.new("RGB", (1036, 831), (60, 70, 90))  # 模拟实测窗口
+    live.paste(dlg, ((1036 - dlg.width) // 2, (831 - dlg.height) // 2))  # 居中
     mod = mods["keju_huishi"]
-    r = mod.recognize(Image.open(huishi_img).convert("RGB"), OCR_CFG)
+    r = mod.recognize(live, OCR_CFG)
     print(f"[keju_huishi 网图] ans={r.answer!r} line={r.answer_line is not None} q={r.question[:30]}...")
     if r.answer == "水":
         passed += 1

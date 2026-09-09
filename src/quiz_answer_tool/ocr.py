@@ -142,14 +142,18 @@ def recognize(
 
 
 def merge_lines(lines: list[Line]) -> list[Line]:
-    """把纵向相邻（同一文本行被 OCR 切成多段）的行合并，段内按横向排序。"""
+    """把纵向相邻（同一文本行被 OCR 切成多段）的行合并，段内按横向排序。
+
+    合并阈值取 0.6*行高：阈值过宽会把折行的上下两行并成一行——
+    并行后按横向排序会打乱文字顺序，导致题面匹配失败。
+    """
     if not lines:
         return []
     ordered = sorted(lines, key=lambda ln: ln.center_y)
     groups: list[list[Line]] = []
     for ln in ordered:
         if groups and ln.center_y - groups[-1][-1].center_y < (
-            max(ln.height, groups[-1][-1].height) * 0.9
+            max(ln.height, groups[-1][-1].height) * 0.6
         ):
             groups[-1].append(ln)
         else:

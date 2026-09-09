@@ -88,8 +88,10 @@ banks/
 ```bash
 .venv\Scripts\python -X utf8 tools\test_text_modules.py   # 科举乡试/会试+元宵 端到端（真实网图+合成题图）
 .venv\Scripts\python -X utf8 tools\test_icon_module.py    # 教师节 9 张真实截图（4 张带 175dt 真值）
+.venv\Scripts\python -X utf8 tools\test_render_align.py   # 预览框/图片对位（含仅识别区域模式）
 .venv\Scripts\python -X utf8 tools\test_gui_smoke.py      # 主窗口/浮窗/渲染冒烟
 .venv\Scripts\python -X utf8 tools\test_live_loop.py      # 实况双线程 6 秒冒烟
+.venv\Scripts\python -X utf8 tools\calibrate_live.py --write  # 实况校准：抓游戏窗口量图标位置写回 ROI
 ```
 
 基线：文字模块 4/4；教师节真值 4/4、9 图全部定位并给出红框；端到端 220~300ms（tiny）。

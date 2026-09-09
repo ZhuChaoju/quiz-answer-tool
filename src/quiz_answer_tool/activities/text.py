@@ -75,13 +75,17 @@ class TextModule(BaseModule):
     def clean_question(cls, text: str, anchor: str) -> list[str]:
         """清理出题面候选。
 
-        OCR 把“关卡前缀+题面”合进同一串时，先截题目锚点（“题目：”），再按
-        关卡词切开：首段（题面在前场景）与末段（题面在后场景）都作为候选。
+        OCR 可能把关卡说明与题面折行乱序合并：取“题目：”锚点后的正文、
+        锚点前的文本、以及按关卡词切开的首/末段，全部作为候选兜底。
         """
         stripped = cls.strip_prefix(text, anchor)
-        parts = re.split(LEVEL_CUT_RE, stripped)
+        segments = re.split(LEVEL_CUT_RE, stripped)
+        cands = [stripped] + [segments[0], segments[-1]]
+        if anchor and stripped != text:
+            m = re.search(anchor, text)
+            cands.append(text[: m.start()])  # 锚点前的文本（折行乱序时题面可能在前段）
         out: list[str] = []
-        for t in (parts[0], parts[-1], stripped):
+        for t in cands:
             t = t.strip().strip("，。；：、,.: ")
             if len(t) >= 4 and t not in out:
                 out.append(t)
