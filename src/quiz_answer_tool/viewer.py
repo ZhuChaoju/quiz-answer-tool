@@ -24,7 +24,6 @@ from . import ocr, screen
 from .activities import BaseModule, ModuleResult, load_modules
 from .overlay import AnswerOverlay
 
-PREVIEW_WIDTH = 900
 PREVIEW_FPS = 30
 ANSWER_COLOR = "#ff4040"
 ROI_COLORS = {"question": "#00ff00", "option": "#00aaff", "icon": "#ff9900", "search": "#bbbb00"}
@@ -66,8 +65,7 @@ class Viewer(tk.Tk):
         self._drag = None
         self._result: ModuleResult | None = None
         self._sources: list = []
-        self._kx = 1.0  # 显示图相对整帧的像素比（预览缩放补偿）
-        self._ky = 1.0
+        self._target_size = (900, 720)  # 预览线程出图尺寸（渲染时按画布更新）
         self._roi_only_flag = bool(ui.get("roi_only", False))  # 线程读的平铺副本（Tk 变量只在线程外读写）
 
         self._source = tk.StringVar()
@@ -318,12 +316,15 @@ class Viewer(tk.Tk):
         self._full_size = full_size
         cw = max(self._canvas.winfo_width(), 200)
         ch = max(self._canvas.winfo_height(), 150)
-        self._scale = min(cw / img.width, ch / img.height)
-        # 预览线程可能把画面缩过分辨率（PREVIEW_WIDTH），框的坐标仍是整帧像素：
-        # 记录"显示图像素 / 整帧像素"比例，画框换算时补上，否则框会整体偏移
-        self._kx = img.width / max(img_rect[2] - img_rect[0], 1.0)
-        self._ky = img.height / max(img_rect[3] - img_rect[1], 1.0)
-        disp_w, disp_h = int(img.width * self._scale), int(img.height * self._scale)
+        rw = max(img_rect[2] - img_rect[0], 1.0)
+        rh = max(img_rect[3] - img_rect[1], 1.0)
+        # scale = 画布像素 / 整帧像素；图片必须真正缩放到 disp 尺寸再显示，
+        # 否则框（按 scale 画）和图片（按原生尺寸显示）比例不一致会错位
+        self._scale = min(cw / rw, ch / rh)
+        disp_w, disp_h = max(1, int(rw * self._scale)), max(1, int(rh * self._scale))
+        self._target_size = (disp_w, disp_h)  # 预览线程按此尺寸出图
+        if img.size != (disp_w, disp_h):
+            img = img.resize((disp_w, disp_h), Image.BILINEAR)
         ox, oy = cw // 2 - disp_w // 2, ch // 2 - disp_h // 2
         self._offset = (ox, oy)
         photo = ImageTk.PhotoImage(img)
@@ -338,18 +339,18 @@ class Viewer(tk.Tk):
         self._draw_answer_box()
 
     def _to_display(self, fx: float, fy: float) -> tuple[float, float]:
-        """整帧像素坐标 → 画布坐标（考虑预览缩放与仅识别区域模式的裁剪偏移）。"""
+        """整帧像素坐标 → 画布坐标（考虑仅识别区域模式的裁剪偏移）。"""
         ox, oy = self._offset
         if self._img_rect is not None:
             l, t, _, _ = self._img_rect
-            return ox + (fx - l) * self._scale * self._kx, oy + (fy - t) * self._scale * self._ky
+            return ox + (fx - l) * self._scale, oy + (fy - t) * self._scale
         return ox + fx * self._scale, oy + fy * self._scale
 
     def _to_img_coord(self, cx: float, cy: float) -> tuple[float, float]:
         ox, oy = self._offset
         if self._img_rect is not None:
             l, t, _, _ = self._img_rect
-            return l + (cx - ox) / (self._scale * self._kx), t + (cy - oy) / (self._scale * self._ky)
+            return l + (cx - ox) / self._scale, t + (cy - oy) / self._scale
         return (cx - ox) / self._scale, (cy - oy) / self._scale
 
     def _draw_rois(self) -> None:
@@ -480,11 +481,10 @@ class Viewer(tk.Tk):
                             l, t, r, b = union
                             rect = (l, t, r, b)
                             frame = frame.crop((int(l), int(t), int(r), int(b)))
-                    ratio = PREVIEW_WIDTH / frame.width
-                    if ratio < 1.0:
-                        frame = frame.resize(
-                            (PREVIEW_WIDTH, max(1, int(frame.height * ratio))), Image.BILINEAR
-                        )
+                    # 出图即缩放到渲染目标尺寸（主线程渲染时更新），框与图共用同一比例
+                    target = self._target_size
+                    if frame.size != target:
+                        frame = frame.resize(target, Image.BILINEAR)
                     try:
                         self._preview_queue.put_nowait((frame, rect, full_size))
                     except queue.Full:
