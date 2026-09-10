@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""活动模块基类：识别区域(ROI)、识别结果与模块装配约定。"""
+"""活动模块基类：识别区域(ROI)、识别结果、答案圈选的共享实现与模块装配约定。"""
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,9 @@ from PIL import Image
 from ..ocr import Line
 
 DEFAULT_ROI = {"x": 10.0, "y": 10.0, "w": 60.0, "h": 30.0}
+
+# 选项行前缀（A、 B. 1、 等）——文字题与看图说话共用
+PREFIX_RE = re.compile(r"^[A-Za-z一二三四五六七八九十百\d]+[、.．:：]\s*")
 
 
 @dataclass
@@ -85,6 +89,8 @@ class BaseModule:
         self.bank_dir = bank_dir
         roi_data = data.get("roi") or {}
         self.rois = {k: Roi.from_json(roi_data.get(k)) for k in self.ROI_KEYS}
+        # OCR 行折行合并阈值（相对行高）；科举折行题面 0.6，可按模块配置覆盖
+        self.merge_threshold = float(data.get("merge_threshold", 0.6))
 
     # ---- 识别（由识别线程调用，frame 为整幅截图） ----
     def recognize(self, frame: Image.Image) -> ModuleResult:
@@ -109,3 +115,68 @@ class BaseModule:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return path
+
+
+# ---- 答案圈选共享实现（文字题与看图说话的默认行为，子类可覆写） ----
+def find_answer_line(
+    lines: list[Line], answer: str
+) -> tuple[Line, float, float] | None:
+    """在选项识别行里定位答案行，返回 (行, 答案段绝对像素左右 x) 供红框圈选。
+
+    命中策略：先按包含关系精确匹配；全部未中时按相似度兜底（≥70/100 才采用）。
+    """
+    from rapidfuzz import fuzz
+
+    answer = answer.strip()
+    if not answer:
+        return None
+    parts = [p.strip() for p in re.split(r"[/／]", answer) if p.strip()]
+
+    def clean(text: str) -> str:
+        return PREFIX_RE.sub("", text.strip())
+
+    for ln in lines:
+        text = clean(ln.text)
+        if not text:
+            continue
+        for part in parts:
+            if part == text or part in text or text in part:
+                return ln, *segment_bounds(ln, part)
+    best: Line | None = None
+    best_ratio = 0
+    for ln in lines:
+        text = clean(ln.text)
+        if not text:
+            continue
+        ratio = max(fuzz.ratio(part, text) for part in parts)  # 0~100
+        if ratio > best_ratio:
+            best, best_ratio = ln, ratio
+    return (best, best.center_x - best.width / 2, best.center_x + best.width / 2) if best and best_ratio >= 70 else None
+
+
+def segment_bounds(line: Line, part: str) -> tuple[float, float]:
+    """定位答案所在 OCR 段的绝对像素范围（选项框之间有间隙，必须用绝对坐标）。"""
+    if line.segments:
+        n = len(line.segments)
+        for seg_text, x1, x2 in line.segments:
+            if part in seg_text or seg_text in part:
+                return x1, x2
+        best: tuple[float, float] | None = None
+        for i in range(n):
+            combined = line.segments[i][0]
+            for j in range(i, n):
+                if j > i:
+                    combined += line.segments[j][0]
+                if part in combined or combined in part:
+                    span = (line.segments[i][1], line.segments[j][2])
+                    if best is None or (span[1] - span[0]) < (best[1] - best[0]):
+                        best = span
+        if best is not None:
+            return best
+    idx = line.text.find(part)
+    if idx >= 0:
+        # 无段信息时退化为行内字符比例（单检测框场景，无间隙问题）
+        w = line.width
+        return line.center_x - w / 2 + w * idx / max(len(line.text), 1), \
+            line.center_x - w / 2 + w * (idx + len(part)) / max(len(line.text), 1)
+    return line.center_x - line.width / 2, line.center_x + line.width / 2

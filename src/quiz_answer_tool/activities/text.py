@@ -17,7 +17,7 @@ from PIL import Image
 
 from .. import ocr
 from ..matcher import QuestionBank
-from .base import BaseModule, ModuleResult, Roi
+from .base import PREFIX_RE, BaseModule, ModuleResult, Roi, find_answer_line  # noqa: F401  (re-export)
 
 # 题目/选项并行识别用的共享执行器（进程级，两线程各绑一个 OCR 引擎实例）
 _OCR_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -112,8 +112,11 @@ class TextModule(BaseModule):
         conf = float(ocr_cfg.get("confidence", 0.4))
         dml = bool(ocr_cfg.get("use_dml", False))
         # 选项区用第二引擎实例并行识别（端到端延迟 ≈ max(题目, 选项)，~200ms 量级）
-        fo = _OCR_EXECUTOR.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml)
-        q_lines = [ln for ln in ocr.recognize(q_crop, lang, conf, mt, False, dml) if not self.is_noise(ln.text)]
+        fo = _OCR_EXECUTOR.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml, self.merge_threshold)
+        q_lines = [
+            ln for ln in ocr.recognize(q_crop, lang, conf, mt, False, dml, self.merge_threshold)
+            if not self.is_noise(ln.text)
+        ]
         # 选项区只剔除空行：科举选项常为单字（金/木/水/火），不能套用题目区的短行噪声规则
         o_lines = [ln for ln in fo.result() if ln.text.strip()]
         res.lines = q_lines + o_lines
@@ -146,66 +149,3 @@ class TextModule(BaseModule):
         else:
             res.note = "题库未命中，可录入答案"
         return res
-
-
-# ---- 答案定位（选项区红框） ----
-PREFIX_RE = re.compile(r"^[A-Za-z一二三四五六七八九十百\d]+[、.．:：]\s*")
-
-
-def find_answer_line(lines: list[ocr.Line], answer: str) -> tuple[ocr.Line, float, float] | None:
-    """在选项识别行里定位答案行，返回 (行, 答案段绝对像素左右 x) 供红框圈选。"""
-    from difflib import SequenceMatcher
-
-    answer = answer.strip()
-    if not answer:
-        return None
-    parts = [p.strip() for p in re.split(r"[/／]", answer) if p.strip()]
-
-    def clean(text: str) -> str:
-        return PREFIX_RE.sub("", text.strip())
-
-    for ln in lines:
-        text = clean(ln.text)
-        if not text:
-            continue
-        for part in parts:
-            if part == text or part in text or text in part:
-                return ln, *segment_bounds(ln, part)
-    best: ocr.Line | None = None
-    best_ratio = 0.0
-    for ln in lines:
-        text = clean(ln.text)
-        if not text:
-            continue
-        ratio = max(SequenceMatcher(None, part, text).ratio() for part in parts)
-        if ratio > best_ratio:
-            best, best_ratio = ln, ratio
-    return (best, best.center_x - best.width / 2, best.center_x + best.width / 2) if best and best_ratio >= 0.7 else None
-
-
-def segment_bounds(line: ocr.Line, part: str) -> tuple[float, float]:
-    """定位答案所在 OCR 段的绝对像素范围（选项框之间有间隙，必须用绝对坐标）。"""
-    if line.segments:
-        n = len(line.segments)
-        for seg_text, x1, x2 in line.segments:
-            if part in seg_text or seg_text in part:
-                return x1, x2
-        best: tuple[float, float] | None = None
-        for i in range(n):
-            combined = line.segments[i][0]
-            for j in range(i, n):
-                if j > i:
-                    combined += line.segments[j][0]
-                if part in combined or combined in part:
-                    span = (line.segments[i][1], line.segments[j][2])
-                    if best is None or (span[1] - span[0]) < (best[1] - best[0]):
-                        best = span
-        if best is not None:
-            return best
-    idx = line.text.find(part)
-    if idx >= 0:
-        # 无段信息时退化为行内字符比例（单检测框场景，无间隙问题）
-        w = line.width
-        return line.center_x - w / 2 + w * idx / max(len(line.text), 1), \
-            line.center_x - w / 2 + w * (idx + len(part)) / max(len(line.text), 1)
-    return line.center_x - line.width / 2, line.center_x + line.width / 2

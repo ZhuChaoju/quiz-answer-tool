@@ -110,11 +110,13 @@ def recognize(
     model_type: str = "tiny",
     parallel: bool = False,
     use_dml: bool = False,
+    merge_threshold: float = 0.6,
 ) -> list[Line]:
     """识别图片中的文本，按行返回（同行文本自动合并，按纵向位置排序）。
 
     parallel=True 时使用第二个引擎实例，与主引擎并发调用（互不阻塞）。
     use_dml=True 时 Windows 上优先 DirectML（GPU）推理。
+    merge_threshold：折行合并阈值（相对行高），按活动模块配置传入。
     """
     engine = _get_engine2(model_type, use_dml) if parallel else _get_engine(model_type, use_dml)
     result = engine(np.asarray(img.convert("RGB")))
@@ -138,14 +140,14 @@ def recognize(
                     height=float(ys.max() - ys.min()),
                 )
             )
-    return merge_lines(lines)
+    return merge_lines(lines, merge_threshold)
 
 
-def merge_lines(lines: list[Line]) -> list[Line]:
+def merge_lines(lines: list[Line], merge_threshold: float = 0.6) -> list[Line]:
     """把纵向相邻（同一文本行被 OCR 切成多段）的行合并，段内按横向排序。
 
-    合并阈值取 0.6*行高：阈值过宽会把折行的上下两行并成一行——
-    并行后按横向排序会打乱文字顺序，导致题面匹配失败。
+    合并阈值 = merge_threshold * 行高（默认 0.6，为科举折行题面调定）：
+    阈值过宽会把折行的上下两行并成一行——并行后按横向排序会打乱文字顺序。
     """
     if not lines:
         return []
@@ -153,7 +155,7 @@ def merge_lines(lines: list[Line]) -> list[Line]:
     groups: list[list[Line]] = []
     for ln in ordered:
         if groups and ln.center_y - groups[-1][-1].center_y < (
-            max(ln.height, groups[-1][-1].height) * 0.6
+            max(ln.height, groups[-1][-1].height) * merge_threshold
         ):
             groups[-1].append(ln)
         else:

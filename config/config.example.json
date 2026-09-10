@@ -1,5 +1,5 @@
 {
-  "interval_sec": 0.2,
+  "interval_sec": 0.05,
   "window_keyword": "梦幻西游",
   "ocr": {"lang": "ch", "confidence": 0.4, "model_type": "tiny", "use_dml": false},
   "ui": {

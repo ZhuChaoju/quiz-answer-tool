@@ -5,6 +5,7 @@
   "icon_bank": "icons.json",
   "panel_bg": [162, 168, 210],
   "threshold": 84,
+  "merge_threshold": 0.5,
   "option_offset": [-19, 102, 376, 226],
   "roi": {
     "icon": { "x": 40.73, "y": 37.91, "w": 4.44, "h": 5.54 },

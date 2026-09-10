@@ -504,12 +504,14 @@ class Viewer(tk.Tk):
 
         def ocr_loop() -> None:
             ocr_cfg = dict(self.cfg.get("ocr", {}))
-            interval = float(self.cfg.get("interval_sec", 0.2))
-            # 引擎预热：模型加载与首次推理秒级，点「开始」先跑空图完成
+            # 默认 0.05s：有感知哈希闸门兜底，画面静止时空转开销极低，还能更快发现新题
+            interval = float(self.cfg.get("interval_sec", 0.05))
+            dml = bool(ocr_cfg.get("use_dml", False))
+            # 引擎预热：模型加载与首次推理秒级，点「开始」先跑空图完成（引擎参数须与正式识别一致）
             try:
                 blank = Image.new("RGB", (64, 16), "white")
-                ocr.recognize(blank, ocr_cfg.get("lang", "ch"), 0.6, ocr_cfg.get("model_type", "tiny"), False, False)
-                ocr.recognize(blank, ocr_cfg.get("lang", "ch"), 0.6, ocr_cfg.get("model_type", "tiny"), True, False)
+                ocr.recognize(blank, ocr_cfg.get("lang", "ch"), 0.6, ocr_cfg.get("model_type", "tiny"), False, dml)
+                ocr.recognize(blank, ocr_cfg.get("lang", "ch"), 0.6, ocr_cfg.get("model_type", "tiny"), True, dml)
             except Exception:
                 pass
             last_hash: int | None = None
