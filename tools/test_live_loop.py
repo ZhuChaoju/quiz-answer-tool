@@ -13,11 +13,16 @@ from quiz_answer_tool.viewer import Viewer
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 modules = load_modules(os.path.join(ROOT, "banks"))
-app = Viewer({"interval_sec": 0.2, "ocr": {"model_type": "tiny"}, "ui": {}}, modules,
+_t0 = None
+app = Viewer({"interval_sec": 0.05, "ocr": {"model_type": "tiny"}, "ui": {}}, modules,
              config_path=os.path.join(ROOT, "build", "test_config.json"))
 
 
 def step1():
+    global _t0
+    import os as _os
+
+    _t0 = _os.times()
     app._reload_sources()
     src = next((s for s in app._sources if s.kind == "monitor"), None)
     assert src is not None, "no monitor source"
@@ -27,7 +32,9 @@ def step1():
 
 
 def step2():
-    errors = []
+    import os as _os
+
+    t1 = _os.times()
     try:
         while True:
             app._result_queue.get_nowait()
@@ -35,7 +42,8 @@ def step2():
         pass
     app._running = False
     app._generation += 1
-    assert not errors
+    cpu = (t1.user - _t0.user) + (t1.system - _t0.system)
+    print(f"loop CPU over ~6s: {cpu:.2f}s -> avg {cpu / 6.0:.3f} cores")
     print("live loop OK (no crashes); results depend on screen content")
     app._on_close()
 
