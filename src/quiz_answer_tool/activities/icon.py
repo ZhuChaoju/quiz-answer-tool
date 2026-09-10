@@ -24,7 +24,7 @@ from PIL import Image
 from .. import ocr
 from .base import PREFIX_RE, BaseModule, ModuleResult, find_answer_line  # noqa: F401  (re-export)
 
-DEFAULT_THRESHOLD = 84  # 哈希距离阈值：真值实测 24~77，非同图标 ≥88
+DEFAULT_THRESHOLD = 84  # 哈希距离阈值：真值实测 24~87，非同图标 ≥88
 GLOBAL_THRESHOLD = 60  # 全库兜底路径的更严阈值（无选项过滤时防误命中）
 S = 64  # 归一化尺寸
 INSET = int(S * 0.12)  # 内缩比例：去掉游戏内浮雕边框/素材自带描边
@@ -247,6 +247,7 @@ class IconModule(BaseModule):
         self.last_hash: str | None = None  # 未命中录入时使用
         self.last_box: tuple[int, int, int, int] | None = None
         self.option_offset = self.OPTION_OFFSET_DEFAULT
+        self.option_max_distance = DEFAULT_THRESHOLD
 
     @classmethod
     def from_json(cls, data: dict[str, Any], bank_dir: str) -> "IconModule":
@@ -256,6 +257,9 @@ class IconModule(BaseModule):
         if isinstance(bg, list) and len(bg) == 3:
             mod.panel_bg = tuple(int(v) for v in bg)
         mod.option_offset = tuple(data.get("option_offset", mod.OPTION_OFFSET_DEFAULT))
+        # 选项过滤路径的接受距离：答案必在四选项之一，且需对次优拉开 ≥4 边距，
+        # 因此可比"无过滤"的全库阈值更宽（实测真值最高 87）
+        mod.option_max_distance = int(data.get("option_max_distance", 100))
         threshold = int(data.get("threshold", DEFAULT_THRESHOLD))
         mod.bank = IconBank.load(os.path.join(bank_dir, data.get("icon_bank", "icons.json")), threshold)
         mod._config_path = os.path.join(bank_dir, "module.json")
@@ -321,7 +325,7 @@ class IconModule(BaseModule):
             best = scored[0]
             # 与次优选项拉开 4 以上距离才算稳（防两个候选都贴近时的误选）
             margin_ok = len(scored) < 2 or scored[1][0] - best[0] >= 4
-            if best[0] <= self.bank.threshold and margin_ok:
+            if best[0] <= self.option_max_distance and margin_ok:
                 res.answer = best[1]
                 res.question = f"看图识别：{best[1]}"
                 res.note = f"图标匹配距离 {best[0]}（选项过滤）"

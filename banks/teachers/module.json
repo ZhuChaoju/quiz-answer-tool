@@ -36,5 +36,6 @@
       "h": 36.0
     }
   },
-  "locked": false
+  "locked": false,
+  "option_max_distance": 100
 }
