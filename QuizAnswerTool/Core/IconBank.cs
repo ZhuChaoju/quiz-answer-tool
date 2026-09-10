@@ -128,4 +128,106 @@ public sealed class IconBank
         if (hit != null) { hit.Answer = answer; return; }
         _entries.Add(new Entry { Hash = iconHash, Answer = answer });
     }
+
+    /// <summary>选项范围模板匹配：实况图标截图 vs 各选项素材图,亮度归一化互相关(NCC)最大者胜。
+    /// NCC 对游戏渲染与素材图的亮度/对比差异鲁棒(MSE 实测两者差异普遍在万级,区分度不足)。
+    /// 实况图取中央 76% 区域比较(边缘是对话框背景)。返回全部候选 (名, ncc) 按 ncc 降序。</summary>
+    public static List<(string Name, double Ncc)> OptionMatchAll(
+        Bitmap live, IEnumerable<string> optionNames, string assetDir)
+    {
+        const int S = 64;   // 统一缩放尺寸
+        const int inset = S * 12 / 100;   // 实况图边缘 12% 为对话框背景,比较时剔除
+        var results = new List<(string, double)>();
+
+        // 实况图边缘中位色:素材透明底的合成色(与实况背景一致,NCC 才能同向比较)
+        var probe = new Bitmap(live, S, S);
+        int[] border = new int[4 * S * 2];
+        int bi = 0;
+        for (int x = 0; x < S; x++)
+        {
+            border[bi++] = probe.GetPixel(x, 0).ToArgb();
+            border[bi++] = probe.GetPixel(x, S - 1).ToArgb();
+            border[bi++] = probe.GetPixel(0, x).ToArgb();
+            border[bi++] = probe.GetPixel(S - 1, x).ToArgb();
+        }
+        var bg = Color.FromArgb(border[bi / 2]);
+        probe.Dispose();
+
+        double[] LiveVec()
+        {
+            using var ls = new Bitmap(live, S, S);
+            var bd = ls.LockBits(new Rectangle(0, 0, S, S), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var v = new double[(S - 2 * inset) * (S - 2 * inset)];
+            try
+            {
+                unsafe
+                {
+                    int i = 0;
+                    for (int y = inset; y < S - inset; y++)
+                    {
+                        var row = (byte*)bd.Scan0 + y * bd.Stride;
+                        for (int x = inset; x < S - inset; x++)
+                            v[i++] = row[x * 4] * 299 + row[x * 4 + 1] * 587 + row[x * 4 + 2] * 114;
+                    }
+                }
+            }
+            finally { ls.UnlockBits(bd); }
+            return v;
+        }
+
+        double[] AssetVec(string path)
+        {
+            using var asset = Image.FromFile(path) as Bitmap ?? new Bitmap(path);
+            using var canvas = new Bitmap(S, S, PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(canvas))
+            {
+                g.Clear(bg);   // 垫实况背景色,亮度关系与实况一致
+                g.InterpolationMode = InterpolationMode.HighQualityBilinear;
+                g.DrawImage(asset, 0, 0, S, S);
+            }
+            var ad2 = canvas.LockBits(new Rectangle(0, 0, S, S), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            var v = new double[(S - 2 * inset) * (S - 2 * inset)];
+            try
+            {
+                unsafe
+                {
+                    int i = 0;
+                    for (int y = inset; y < S - inset; y++)
+                    {
+                        var row = (byte*)ad2.Scan0 + y * ad2.Stride;
+                        for (int x = inset; x < S - inset; x++)
+                            v[i++] = row[x * 4] * 299 + row[x * 4 + 1] * 587 + row[x * 4 + 2] * 114;
+                    }
+                }
+            }
+            finally { canvas.UnlockBits(ad2); }
+            return v;
+        }
+
+        static double Ncc(double[] a, double[] b)
+        {
+            double ma = 0, mb = 0;
+            for (int i = 0; i < a.Length; i++) { ma += a[i]; mb += b[i]; }
+            ma /= a.Length; mb /= b.Length;
+            double num = 0, da = 0, db = 0;
+            for (int i = 0; i < a.Length; i++)
+            {
+                double xa = a[i] - ma, xb = b[i] - mb;
+                num += xa * xb; da += xa * xa; db += xb * xb;
+            }
+            double den = Math.Sqrt(da * db);
+            return den > 0 ? num / den : 0;
+        }
+
+        var lv = LiveVec();
+        foreach (var name in optionNames.Distinct())
+        {
+            if (string.IsNullOrWhiteSpace(name)) continue;
+            var path = Path.Combine(assetDir, name.Trim() + ".png");
+            if (!File.Exists(path)) continue;
+            try { results.Add((name.Trim(), Ncc(lv, AssetVec(path)))); }
+            catch { /* 单个素材损坏跳过 */ }
+        }
+        return results.OrderByDescending(r => r.Item2).ToList();
+    }
 }

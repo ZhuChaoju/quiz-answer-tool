@@ -22,11 +22,9 @@
             <TextBlock x:Name="StatusText" Text="" VerticalAlignment="Center" Margin="20,0" Foreground="#666"/>
         </StackPanel>
 
-        <!-- 预览画布：拖拽题目/图标框(绿)与选项框(蓝)，空白处拖出新题目框 -->
+        <!-- 预览画布：ROI 写死在 config.json（图标区/选项区固定比例），仅保留红框答案高亮 -->
         <Border Grid.Row="1" Background="#222" Margin="8,0">
-            <Canvas x:Name="PreviewCanvas" ClipToBounds="True"
-                    MouseLeftButtonDown="OnCanvasDown" MouseLeftButtonUp="OnCanvasUp"
-                    MouseMove="OnCanvasMove"/>
+            <Canvas x:Name="PreviewCanvas" ClipToBounds="True"/>
         </Border>
 
         <!-- 底部信息面板 -->

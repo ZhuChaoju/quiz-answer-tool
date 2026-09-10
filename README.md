@@ -103,6 +103,10 @@ QuizAnswerTool/
 
 ## 已知限制
 
+- 2026-09-10 与 Python 版(main)的结构差异：活动切换在 MainWindow 内联 if/else（Python 为 banks/ 模块化装配）；
+  OCR 未做折行合并（Python 有可配置 merge_lines），长题面折行后按单行匹配；
+  AnswerLocator.Segments 为 (0,1) 占位比例（Python 已改为检测框绝对像素），红框精度与 Python 不一致；
+  答案圈选已集中 AnswerLocator 静态类，与 Python base.py 依赖方向一致，无兄弟模块串扰
 - 游戏画面持续动画时哈希闸门不生效，仍会按间隔 OCR（静止界面零开销）
 - 未命中题目靠"答案录入"功能积累题库
 - ROI 写死适配当前游戏版本布局，版本更新后需重新标定

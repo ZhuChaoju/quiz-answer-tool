@@ -28,6 +28,8 @@ public partial class MainWindow : Window
     private QuestionBank? _bank;
     private IconBank _icons = new();
     private string _iconsPath = "icons.json";
+    private string _assetDir = "skill_icons";   // 官方技能图标素材库(选项模板匹配用)
+    private readonly List<string> _assetNames = new();   // 素材名列表(选项名字典反查用)
     private string _lastIconHash = "";
     private string _activity = "keju";   // keju=科举文字题 / picture=看图说话
     private List<ScreenSource> _sources = new();
@@ -36,25 +38,17 @@ public partial class MainWindow : Window
     private string _questionsPath = "questions.json";
     private double _previewScale = 1.0;
     private (double X, double Y) _previewOffset;
-    private (double W, double H) _previewDispSize;
     private System.Drawing.Size _fullSize;
     private string _tmpDir = "";
-    // 识别实际使用的 ROI（UI 可拖拽实时更新；后台线程按引用快照读取）
+    // 识别实际使用的 ROI（写死在 config.json，按活动切换；后台线程按引用快照读取）
     private Roi _qRoi = new();   // 科举=题目区 / 看图说话=图标区
     private Roi _oRoi = new();   // 选项区（按活动独立）
     private (Roi Q, Roi O) _kejuRois;
     private (Roi Q, Roi O) _pictureRois;
-    private bool _dragging;
-    private string _dragTarget = "q";    // 拖的是题目框(q)还是选项框(o)
-    private string _dragMode = "move";   // move / resize / create
-    private (double X, double Y) _dragStart;   // 按下时图内坐标
-    private System.Drawing.Rectangle _dragOrig;  // 按下时框的图内像素矩形
 
     // 预览元素常驻复用：每帧只更新像素与坐标，不重建子元素
     private const int PreviewFps = 30;
     private System.Windows.Controls.Image? _previewImage;
-    private System.Windows.Shapes.Rectangle? _qZoneRect;
-    private System.Windows.Shapes.Rectangle? _oZoneRect;
     private System.Windows.Shapes.Rectangle? _answerRect;
     private WriteableBitmap? _previewBitmap;
 
@@ -96,6 +90,14 @@ public partial class MainWindow : Window
                         ?? Path.Combine(baseDir, "icons.json");
         _iconsPath = iconsPath;
         _icons = IconBank.Load(iconsPath);
+        _assetDir = candidates.Select(d => Path.Combine(d, "skill_icons")).FirstOrDefault(Directory.Exists)
+                    ?? Path.Combine(baseDir, "skill_icons");
+        try
+        {
+            _assetNames.AddRange(Directory.GetFiles(_assetDir, "*.png")
+                .Select(Path.GetFileNameWithoutExtension));
+        }
+        catch { /* 素材目录不存在时名单为空 */ }
         try { WinOcr.EnsureEngine(baseDir, _cfg.ModelType, _cfg.UseDml); }
         catch (Exception ex) { StatusText.Text = $"OCR引擎初始化失败: {ex.Message}"; }
 
@@ -119,7 +121,6 @@ public partial class MainWindow : Window
         _activity = ActivityBox.SelectedIndex == 1 ? "picture" : "keju";
         (_qRoi, _oRoi) = _activity == "picture" ? _pictureRois : _kejuRois;
         _lastIconHash = "";
-        DrawZones();
         UpdateRoiLabel();
     }
 
@@ -192,10 +193,31 @@ public partial class MainWindow : Window
 
                         if (_activity == "picture")
                         {
-                            // 看图说话：图标哈希定答案，选项区 OCR 仅用于红框定位
+                            // 看图说话：图标哈希定答案，选项区 OCR 用于红框定位与选项名解析
                             _lastIconHash = IconBank.HashIcon(qBmp);
                             string? iconAnswer = _icons.Match(_lastIconHash);
+                            string matchSrc = "bank";
                             var oLines0 = WinOcr.Recognize(oBmp).Where(ln => !IsUiNoise(ln.Text)).ToList();
+                            if (iconAnswer == null)
+                            {
+                                // 图标库未收录:选项范围模板匹配(OCR 出的 4 个选项名 → 对应素材图逐一比对)
+                                var optNames = ParseOptionNames(oLines0.Select(ln => ln.Text));
+                                if (optNames.Count > 0)
+                                {
+                                    var all = IconBank.OptionMatchAll(qBmp, optNames, _assetDir);
+                                    Log($"资产匹配: {string.Join(" | ", all.Select(r => $"{r.Name}={r.Ncc:F3}"))}");
+                                    // 取相关度最大者:必须为正(真匹配)且领先次名足够多(0.06)
+                                    if (all.Count > 0 && all[0].Ncc > 0.3
+                                        && (all.Count == 1 || all[0].Ncc - all[1].Ncc >= 0.06))
+                                    {
+                                        iconAnswer = all[0].Name;
+                                        matchSrc = "asset";
+                                        // 命中即入库:同图标下次直接走图标库,零延迟
+                                        try { _icons.Add(_lastIconHash, iconAnswer); _icons.Save(_iconsPath); }
+                                        catch { /* 入库失败不影响本次作答 */ }
+                                    }
+                                }
+                            }
                             string display = iconAnswer != null
                                 ? $"看图识别: {iconAnswer}"
                                 : "看图识别: 图标未收录,请在下方录入答案";
@@ -210,8 +232,16 @@ public partial class MainWindow : Window
                             Dispatcher.Invoke(() =>
                             {
                                 _lastQuestion = display;
-                                QuestionText.Text = "题目: " + display;
-                                AnswerText.Text = iconAnswer != null ? "答案: " + iconAnswer : "未收录";
+                                QuestionText.Text = "题目: " + display + (matchSrc == "asset" ? "  [素材匹配]" : "");
+                                // 显示选项字母(红框定位到哪行就取该行前缀字母),点击更快
+                                string letter = "";
+                                if (hit0 != null)
+                                {
+                                    var m = System.Text.RegularExpressions.Regex.Match(
+                                        hit0.Value.Line.Text, @"^([A-Da-d])[、.．:：]");
+                                    if (m.Success) letter = m.Groups[1].Value.ToUpper() + "、";
+                                }
+                                AnswerText.Text = iconAnswer != null ? "答案: " + letter + iconAnswer : "未收录";
                                 RawText.Text = "识别文本: " + display + "\n" +
                                                string.Join("\n", oLines0.Select(ln => ln.Text));
                                 if (hit0 == null && _answerRect != null)
@@ -330,70 +360,27 @@ public partial class MainWindow : Window
         EntryBox.Text = "";
     }
 
-    // ---- ROI 拖拽（题目/图标框绿 + 选项框蓝；框内拖动、右下角缩放、空白处拖出新题目框） ----
+    // ---- ROI：写死在 config.json（图标区/选项区固定比例），无需画框与拖拽 ----
 
-    private (double X, double Y) CanvasToImagePercent(System.Windows.Point p)
+    /// <summary>从选项 OCR 文本中解析选项名:优先 A/B/C/D 前缀;OCR 丢前缀时(常见)
+    /// 用素材库名单做子串反查(玩家名噪声不在名单中,天然过滤)。</summary>
+    private List<string> ParseOptionNames(IEnumerable<string> lines)
     {
-        double fx = (p.X - _previewOffset.X) / _previewScale;
-        double fy = (p.Y - _previewOffset.Y) / _previewScale;
-        return (_fullSize.Width > 0 ? fx / _fullSize.Width * 100 : 0,
-                _fullSize.Height > 0 ? fy / _fullSize.Height * 100 : 0);
-    }
-
-    private void OnCanvasDown(object sender, MouseButtonEventArgs e)
-    {
-        if (_fullSize.Width == 0 || _fullSize.Height == 0) return;
-        var (px, py) = CanvasToImagePercent(e.GetPosition(PreviewCanvas));
-        // 命中哪个框拖哪个（选项框判定在前：两框相邻时优先响应更小的选项框）
-        foreach (var (target, roi) in new[] { ("o", _oRoi), ("q", _qRoi) })
+        var joined = string.Join(" ", lines.Select(l => l.Trim())).Replace(" ", "");
+        var names = new List<string>();
+        var matches = System.Text.RegularExpressions.Regex.Matches(
+            joined, @"[A-Da-d][、.．:：]([^A-Da-d、.．:：\s]{1,10})");
+        foreach (System.Text.RegularExpressions.Match m in matches)
         {
-            if (px >= roi.X && px <= roi.X + roi.W && py >= roi.Y && py <= roi.Y + roi.H)
-            {
-                // 右下角 14 画布像素 = 缩放手柄
-                double handleW = _fullSize.Width > 0 ? 14.0 / _previewScale / _fullSize.Width * 100 : 2;
-                double handleH = _fullSize.Height > 0 ? 14.0 / _previewScale / _fullSize.Height * 100 : 2;
-                _dragTarget = target;
-                _dragMode = px > roi.X + roi.W - handleW && py > roi.Y + roi.H - handleH ? "resize" : "move";
-                _dragStart = (px, py);
-                _dragOrig = new System.Drawing.Rectangle((int)roi.X, (int)roi.Y, (int)roi.W, (int)roi.H);
-                _dragging = true;
-                PreviewCanvas.CaptureMouse();
-                return;
-            }
+            var n = m.Groups[1].Value.Trim();
+            if (n.Length >= 2) names.Add(n);
         }
-        _dragTarget = "q";
-        _dragMode = "create";
-        _dragStart = (px, py);
-        _dragOrig = new System.Drawing.Rectangle();
-        _dragging = true;
-        PreviewCanvas.CaptureMouse();
-    }
-
-    private void OnCanvasMove(object sender, MouseEventArgs e)
-    {
-        if (!_dragging) return;
-        var (px, py) = CanvasToImagePercent(e.GetPosition(PreviewCanvas));
-        double ox = _dragOrig.X, oy = _dragOrig.Y, ow = _dragOrig.Width, oh = _dragOrig.Height;
-        var (sx, sy) = _dragStart;
-        double nx, ny, nw, nh;
-        if (_dragMode == "move") { nx = ox + px - sx; ny = oy + py - sy; nw = ow; nh = oh; }
-        else if (_dragMode == "resize") { nx = ox; ny = oy; nw = px - ox; nh = py - oy; }
-        else { nx = Math.Min(sx, px); ny = Math.Min(sy, py); nw = Math.Abs(px - sx); nh = Math.Abs(py - sy); }
-        nx = Math.Max(0, Math.Min(nx, 99));
-        ny = Math.Max(0, Math.Min(ny, 99));
-        nw = Math.Max(1, Math.Min(nw, 100 - nx));
-        nh = Math.Max(1, Math.Min(nh, 100 - ny));
-        var roi = new Roi { X = nx, Y = ny, W = nw, H = nh };
-        if (_dragTarget == "o") _oRoi = roi; else _qRoi = roi;
-        DrawZones();
-        UpdateRoiLabel();
-    }
-
-    private void OnCanvasUp(object sender, MouseButtonEventArgs e)
-    {
-        if (!_dragging) return;
-        _dragging = false;
-        PreviewCanvas.ReleaseMouseCapture();
+        if (names.Count == 0 && _assetNames.Count > 0)
+        {
+            foreach (var n in _assetNames)
+                if (joined.Contains(n)) names.Add(n);
+        }
+        return names;
     }
 
     private void UpdateRoiLabel()
@@ -520,24 +507,12 @@ public partial class MainWindow : Window
         // 原图 → 画布总缩放 = 缩略缩放 × 画布缩放
         _previewScale = thumbScale * canvasScale;
         _previewOffset = (ox, oy);
-        _previewDispSize = (dispW, dispH);
 
         if (_previewImage == null) return;
         WpfCanvas.SetLeft(_previewImage, ox);
         WpfCanvas.SetTop(_previewImage, oy);
         _previewImage.Width = dispW;
         _previewImage.Height = dispH;
-        DrawZones();
-    }
-
-    /// <summary>按当前 ROI 重画题目/图标框(绿)与选项框(蓝)；拖拽与每帧渲染共用。</summary>
-    private void DrawZones()
-    {
-        var (dispW, dispH) = _previewDispSize;
-        if (dispW <= 0 || _previewImage == null) return;
-        var (ox, oy) = _previewOffset;
-        UpdateZoneRect(ref _qZoneRect, _qRoi, QuestionZoneColor, dispW, dispH, ox, oy);
-        UpdateZoneRect(ref _oZoneRect, _oRoi, OptionZoneColor, dispW, dispH, ox, oy);
     }
 
     private void UpdateZoneRect(

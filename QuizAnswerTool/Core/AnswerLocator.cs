@@ -50,7 +50,8 @@ public static class AnswerLocator
         return m.Success ? text[m.Length..] : text;
     }
 
-    /// <summary>段坐标优先；跨段拼接取最窄覆盖；无段信息退化字符比例。</summary>
+    /// <summary>段坐标优先；否则按字符比例并外扩到选项字母前缀、截断到下一选项字母，
+    /// 红框完整圈住 "D、答案" 整个选项而非仅答案文字。</summary>
     private static (double, double) SegmentBounds(OcrLine line, string part)
     {
         if (line.Segments.Count > 0)
@@ -62,27 +63,24 @@ public static class AnswerLocator
                 if (segText.Contains(part) || part.Contains(segText))
                     return (segLeft, segRight);
             }
-            (double, double)? best = null;
-            for (int i = 0; i < n; i++)
-            {
-                var combined = line.Segments[i].Text;
-                for (int j = i; j < n; j++)
-                {
-                    if (j > i) combined += line.Segments[j].Text;
-                    if (combined.Contains(part) || part.Contains(combined))
-                    {
-                        var span = (line.Segments[i].Left, line.Segments[j].Right);
-                        if (best == null || span.Item2 - span.Item1 < best.Value.Item2 - best.Value.Item1)
-                            best = span;
-                    }
-                }
-            }
-            if (best != null) return best.Value;
         }
         int idx = line.Text.IndexOf(part, StringComparison.Ordinal);
-        if (idx >= 0)
-            return ((double)idx / Math.Max(line.Text.Length, 1), (double)(idx + part.Length) / Math.Max(line.Text.Length, 1));
-        return (0.0, 1.0);
+        if (idx < 0) return (0.0, 1.0);
+
+        // 起点向前包含紧邻的选项字母前缀(如 "D、")
+        int start = idx;
+        var back = line.Text[Math.Max(0, idx - 3)..idx];
+        var pm = Regex.Match(back, @"[A-Da-d][、.．:：]\s*$");
+        if (pm.Success) start = Math.Max(0, idx - 3) + pm.Index;
+
+        // 终点截断到答案之后的下一个选项字母(一行合并多个选项时只圈目标段)
+        int end = idx + part.Length;
+        var next = new Regex(@"[A-Da-d][、.．:：]").Match(line.Text, end);
+        if (next.Success && next.Index > end) end = next.Index;
+        else end = line.Text.Length;
+
+        int len = Math.Max(line.Text.Length, 1);
+        return ((double)start / len, (double)end / len);
     }
 
     private static double Ratio(string a, string b)
