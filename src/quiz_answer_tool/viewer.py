@@ -271,20 +271,18 @@ class Viewer(tk.Tk):
         self._source_box["values"] = names
         if not names:
             return
+        # 窗口优先级：含关键词且含 ONLINE 的游戏主窗口 > 含关键词 > 第一个窗口
+        # （游戏有个独立悬浮窗"梦幻西游 聊天窗口"也会命中关键词，必须排后面）
         keyword = self.cfg.get("window_keyword", "")
-        idx = 0
-        if keyword:
-            hit = next(
-                (i for i, s in enumerate(self._sources) if s.kind == "window" and keyword in s.name),
-                None,
-            )
-            if hit is not None:
-                idx = hit
-        else:
-            win_idx = next((i for i, s in enumerate(self._sources) if s.kind == "window"), None)
-            if win_idx is not None:
-                idx = win_idx
-        self._source_box.current(idx)
+
+        def rank(s) -> int:
+            if s.kind == "window" and keyword and keyword in s.name:
+                return 0 if "ONLINE" in s.name.upper() else 1
+            return 2
+
+        windows = [(rank(s), i) for i, s in enumerate(self._sources)]
+        windows.sort()
+        self._source_box.current(windows[0][1])
 
     def _current_source(self):
         idx = self._source_box.current()
