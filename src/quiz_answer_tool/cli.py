@@ -18,15 +18,26 @@ def _enable_dpi_awareness() -> None:
     """Windows 高分屏：声明进程 DPI 感知，使窗口坐标与截图像素一致。
 
     必须在本进程创建任何窗口（Tk）之前调用；非 Windows 平台无操作。
+    优先 Per-Monitor-V2：125%/150% 缩放下抓到的是原生分辨率画面（OCR 更清晰），
+    失败再退回 shcore(1)、最后 SetProcessDPIAware。
     """
     if sys.platform != "win32":
         return
     import ctypes
 
     try:
+        # Windows 10 1703+：Per-Monitor V2（-4 为 DPI_AWARENESS_CONTEXT 值）
+        if ctypes.windll.user32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
         ctypes.windll.shcore.SetProcessDpiAwareness(1)
     except Exception:
-        ctypes.windll.user32.SetProcessDPIAware()
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
 
 
 def _load_config(path: str) -> dict:

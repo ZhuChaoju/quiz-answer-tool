@@ -317,8 +317,9 @@ class Viewer(tk.Tk):
         rw = max(img_rect[2] - img_rect[0], 1.0)
         rh = max(img_rect[3] - img_rect[1], 1.0)
         # scale = 画布像素 / 整帧像素；图片必须真正缩放到 disp 尺寸再显示，
-        # 否则框（按 scale 画）和图片（按原生尺寸显示）比例不一致会错位
-        self._scale = min(cw / rw, ch / rh)
+        # 否则框（按 scale 画）和图片（按原生尺寸显示）比例不一致会错位。
+        # 4K 屏上限 1920 宽：足够清晰且控制 30fps 缩放开销
+        self._scale = min(cw / rw, ch / rh, 1920.0 / rw)
         disp_w, disp_h = max(1, int(rw * self._scale)), max(1, int(rh * self._scale))
         self._target_size = (disp_w, disp_h)  # 预览线程按此尺寸出图
         if img.size != (disp_w, disp_h):
