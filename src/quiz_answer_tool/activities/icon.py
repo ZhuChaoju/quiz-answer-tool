@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import os
 from collections import deque
 from typing import Any
@@ -24,7 +25,7 @@ from PIL import Image
 from .. import ocr
 from .base import PREFIX_RE, BaseModule, ModuleResult, find_answer_line  # noqa: F401  (re-export)
 
-DEFAULT_THRESHOLD = 84  # 哈希距离阈值：真值实测 24~87，非同图标 ≥88
+DEFAULT_THRESHOLD = 84  # 确认区阈值：≤84 直接给红框答案（真值实测 24~87）
 GLOBAL_THRESHOLD = 60  # 全库兜底路径的更严阈值（无选项过滤时防误命中）
 S = 64  # 归一化尺寸
 INSET = int(S * 0.12)  # 内缩比例：去掉游戏内浮雕边框/素材自带描边
@@ -183,6 +184,11 @@ class IconBank:
         return cls(data if isinstance(data, list) else [], threshold)
 
     def save(self, path: str) -> None:
+        try:  # 录入防呆：保存前备份上一版，录坏可回滚
+            if os.path.exists(path):
+                shutil.copyfile(path, path + ".bak")
+        except OSError:
+            pass
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self._entries, f, ensure_ascii=False, indent=0)
 
@@ -274,9 +280,9 @@ class IconModule(BaseModule):
         if isinstance(bg, list) and len(bg) == 3:
             mod.panel_bg = tuple(int(v) for v in bg)
         mod.option_offset = tuple(data.get("option_offset", mod.OPTION_OFFSET_DEFAULT))
-        # 选项过滤路径的接受距离：答案必在四选项之一，且需对次优拉开 ≥4 边距，
-        # 因此可比"无过滤"的全库阈值更宽（实测真值最高 87）
-        mod.option_max_distance = int(data.get("option_max_distance", 100))
+        # 选项过滤路径：≤threshold(84) 确认命中；≤option_max_distance(100) 且领先次优 4 分
+        # 视为"待核对"命中（软区，真值实测最高 87）
+        mod.option_max_distance = int(data.get("option_max_distance", 104))
         threshold = int(data.get("threshold", DEFAULT_THRESHOLD))
         mod.bank = IconBank.load(os.path.join(bank_dir, data.get("icon_bank", "icons.json")), threshold)
         mod._config_path = os.path.join(bank_dir, "module.json")
@@ -354,9 +360,16 @@ class IconModule(BaseModule):
             if best[0] <= self.option_max_distance and margin_ok:
                 res.answer = best[1]
                 res.question = f"看图识别：{best[1]}"
-                res.note = f"图标匹配距离 {best[0]}（选项过滤）"
                 res.answer_line = (best[2], best[3], best[4])
-                res.state = "hit"
+                if best[0] <= self.bank.threshold:
+                    # 确认区：直接给答案
+                    res.note = f"图标匹配距离 {best[0]}（选项过滤）"
+                    res.state = "hit"
+                else:
+                    # 待核对区（threshold~option_max_distance）：大概率正确，提示自行核对
+                    res.note = f"待核对：距离 {best[0]} 偏大但领先次优，请对照图标确认"
+                    res.state = "soft_hit"
+                    res.answer = f"{best[1]}？"
                 return res
         # 4) 全库兜底
         near = self.bank.nearest(h) if self.bank else None
@@ -365,8 +378,9 @@ class IconModule(BaseModule):
             res.question = f"看图识别：{near[0]}"
             res.note = f"全库匹配距离 {near[1]}"
             res.state = "hit"
+            # 两字技能名错一字后相似度仅 50，框定位放宽到 50（答案本身来自哈希，不受影响）
             if res.answer_line is None and o_lines:
-                res.answer_line = find_answer_line(o_lines, near[0])
+                res.answer_line = find_answer_line(o_lines, near[0], fuzzy_box_threshold=50)
             return res
         res.question = "图标未收录"
         res.note = f"图标未收录（最近: {near[0]} 距离{near[1]}），请在录入框输入技能名"

@@ -654,11 +654,17 @@ class Viewer(tk.Tk):
                     result: ModuleResult = payload[0]
                     self._result = result
                     self._set_text(self._q_text, f"题目: {result.question or '-'}")
-                    self._set_text(self._a_text, f"答案: {result.answer}" if result.answer else "未命中")
+                    if result.state == "soft_hit":
+                        self._set_text(self._a_text, f"答案(待核对): {result.answer}")
+                    else:
+                        self._set_text(self._a_text, f"答案: {result.answer}" if result.answer else "未命中")
                     raw = "\n".join(ln.text for ln in result.lines)
                     self._set_text(self._raw_text, f"识别文本: {raw}" if raw else "识别文本: -")
                     if self._overlay and self._overlay.win.winfo_exists():
-                        self._overlay.update(result.question, result.answer, result.note)
+                        ans = result.answer
+                        if result.state == "soft_hit":
+                            ans = f"{ans}？" if ans else "未命中"
+                        self._overlay.update(result.question, ans, result.note)
                     self._draw_answer_box()
                     self._append_result_log(result)
                 elif kind == "error":

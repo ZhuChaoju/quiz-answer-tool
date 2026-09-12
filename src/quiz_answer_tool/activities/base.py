@@ -120,11 +120,13 @@ class BaseModule:
 
 # ---- 答案圈选共享实现（文字题与看图说话的默认行为，子类可覆写） ----
 def find_answer_line(
-    lines: list[Line], answer: str
+    lines: list[Line], answer: str, fuzzy_box_threshold: int = 70
 ) -> tuple[Line, float, float] | None:
     """在选项识别行里定位答案行，返回 (行, 答案段绝对像素左右 x) 供红框圈选。
 
-    命中策略：先按包含关系精确匹配；全部未中时按相似度兜底（≥70/100 才采用）。
+    命中策略：先按包含关系精确匹配；全部未中时按相似度兜底（≥fuzzy_box_threshold/100
+    才采用）。答案本身来自哈希/题库，此处的相似度只影响红框画在哪个选项上，
+    因此看图说话（两字技能名错一字后相似度仅 50）可传 50 放宽框定位。
     """
     from rapidfuzz import fuzz
 
@@ -152,7 +154,8 @@ def find_answer_line(
         ratio = max(fuzz.ratio(part, text) for part in parts)  # 0~100
         if ratio > best_ratio:
             best, best_ratio = ln, ratio
-    return (best, best.center_x - best.width / 2, best.center_x + best.width / 2) if best and best_ratio >= 70 else None
+    cutoff = fuzzy_box_threshold
+    return (best, best.center_x - best.width / 2, best.center_x + best.width / 2) if best and best_ratio >= cutoff else None
 
 
 def segment_bounds(line: Line, part: str) -> tuple[float, float]:
