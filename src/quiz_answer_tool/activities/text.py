@@ -121,6 +121,7 @@ class TextModule(BaseModule):
         o_lines = [ln for ln in fo.result() if ln.text.strip()]
         res.lines = q_lines + o_lines
         if not q_lines or not o_lines:
+            res.state = "no_dialog"
             res.note = "识别区域内容不足"
             return res
         q_lines.sort(key=lambda ln: ln.center_y)
@@ -144,6 +145,7 @@ class TextModule(BaseModule):
             self.last_question = joined
         res.answer = answer
         res.matched = question_dict
+        res.state = "hit" if answer else "miss_in_question"
         if answer:
             res.answer_line = find_answer_line(o_lines, answer)
         else:

@@ -601,6 +601,39 @@ class Viewer(tk.Tk):
             self._set_text(self._a_text, f"已收录: {q} → {text}")
         self._entry_var.set("")
 
+    def _append_result_log(self, result: ModuleResult) -> None:
+        """识别结果落盘：命中与答题中未命中全记录；无题目时只在状态切换时记一条。
+
+        每行含原始识别文本——OCR 错字（如"神行干里"）一眼可见。
+        """
+        try:
+            key = (result.state, result.answer, result.question[:40])
+            if result.state == "no_dialog":
+                if getattr(self, "_last_log_state", "") == "no_dialog":
+                    return  # 无题目状态不刷屏
+                line = f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {self._module.name} | 离开答题界面（无题目）"
+                self._last_log_state = "no_dialog"
+            else:
+                if key == getattr(self, "_last_log_key", None):
+                    return  # 同一道题重复识别，不重复记录
+                self._last_log_state = result.state
+                self._last_log_key = key
+                mod = self._module
+                hash_part = f" | hash={mod.last_hash}" if getattr(mod, "last_hash", None) else ""
+                raw = " ".join(ln.text for ln in result.lines)[:100]
+                line = (
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {mod.name} | "
+                    f"答案={result.answer or '未命中'} | {result.note}{hash_part} | "
+                    f"识别文本: {raw}"
+                )
+            log_dir = os.path.dirname(os.path.abspath(sys.executable)) if getattr(sys, "frozen", False) else os.getcwd()
+            os.makedirs(os.path.join(log_dir, "logs"), exist_ok=True)
+            path = os.path.join(log_dir, "logs", time.strftime("识别日志-%Y%m%d.txt"))
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass  # 日志失败不影响识别
+
     # ---------- 队列轮询 ----------
     def _poll_queues(self) -> None:
         try:
@@ -627,6 +660,7 @@ class Viewer(tk.Tk):
                     if self._overlay and self._overlay.win.winfo_exists():
                         self._overlay.update(result.question, result.answer, result.note)
                     self._draw_answer_box()
+                    self._append_result_log(result)
                 elif kind == "error":
                     self._set_text(self._a_text, payload[0])
         except queue.Empty:

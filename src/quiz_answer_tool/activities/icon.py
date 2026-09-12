@@ -202,12 +202,16 @@ class IconBank:
         return min(hamming(h, x) for x in hs)
 
     def fuzzy_name(self, text: str) -> str | None:
-        """OCR 出的选项名可能带错别字，模糊对回库名。"""
+        """OCR 出的选项名可能带错别字（如"神行干里"→"神行千里"）。
+
+        阈值 70 只用于生成候选；最终采信由图标哈希距离+边距裁决，
+        错误映射的距离很远，不会胜出。
+        """
         from rapidfuzz import process, fuzz
 
         if not self._by_name:
             return None
-        hit = process.extractOne(text, list(self._by_name), scorer=fuzz.ratio, score_cutoff=80)
+        hit = process.extractOne(text, list(self._by_name), scorer=fuzz.ratio, score_cutoff=70)
         return hit[0] if hit else None
 
     def nearest(self, h: str) -> tuple[str, int] | None:
@@ -322,6 +326,13 @@ class IconModule(BaseModule):
         res.lines = o_lines
         h = icon_hash(icon_crop)
         self.last_hash = h
+        if box:
+            res.state = "miss_in_question"  # 命中时下方会改为 hit
+        else:
+            # 图标定位失败：选项区若能读出多行有效文字，多半是题目在但定位失败
+            res.state = "miss_in_question" if sum(1 for ln in o_lines if len(ln.text.strip()) >= 4) >= 2 else "no_dialog"
+        h = icon_hash(icon_crop)
+        self.last_hash = h
         cands = option_candidates(o_lines)
         # 3) 选项名过滤匹配：最优选项 = 库内距离最小的那个候选（含实拍哈希变体）
         scored: list[tuple[int, str, ocr.Line, float, float]] = []
@@ -345,6 +356,7 @@ class IconModule(BaseModule):
                 res.question = f"看图识别：{best[1]}"
                 res.note = f"图标匹配距离 {best[0]}（选项过滤）"
                 res.answer_line = (best[2], best[3], best[4])
+                res.state = "hit"
                 return res
         # 4) 全库兜底
         near = self.bank.nearest(h) if self.bank else None
@@ -352,6 +364,7 @@ class IconModule(BaseModule):
             res.answer = near[0]
             res.question = f"看图识别：{near[0]}"
             res.note = f"全库匹配距离 {near[1]}"
+            res.state = "hit"
             if res.answer_line is None and o_lines:
                 res.answer_line = find_answer_line(o_lines, near[0])
             return res
