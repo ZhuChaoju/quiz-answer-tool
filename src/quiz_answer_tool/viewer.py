@@ -67,6 +67,7 @@ class Viewer(tk.Tk):
         self._sources: list = []
         self._target_size = (900, 720)  # 预览线程出图尺寸（渲染时按画布更新）
         self._roi_only_flag = bool(ui.get("roi_only", False))  # 线程读的平铺副本（Tk 变量只在线程外读写）
+        self._auto_start_done = False
 
         self._source = tk.StringVar()
         self._img: Image.Image | None = None  # 当前显示图（全画面或 ROI 并集裁剪）
@@ -93,7 +94,21 @@ class Viewer(tk.Tk):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"+{max(sw - self.winfo_width() - 20, 0)}+{max((sh - self.winfo_height()) // 2, 0)}")
         self.after(16, self._poll_queues)
+        # 自动开始：启动即自动选源并进入识别循环（可被 ui.autostart=false 关闭）
+        if ui.get("autostart", True):
+            self.after(1200, self._auto_start)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _auto_start(self) -> None:
+        """启动即自动开始：选好来源后直接进入识别循环，无需点按钮。"""
+        if self._running or self._auto_start_done:
+            return
+        self._reload_sources()
+        if self._current_source() is None:
+            self.after(2000, self._auto_start)  # 还没有可用来源（如游戏未启动），稍后重试
+            return
+        self._auto_start_done = True
+        self._toggle()
 
     # ---------- UI ----------
     def _build_ui(self) -> None:
@@ -532,6 +547,8 @@ class Viewer(tk.Tk):
                 if cur == last_hash:
                     continue
                 last_hash = cur
+                # 画面已变化：立即清掉上一题的红框/动态选项框，避免新题出来时残留
+                self._result_queue.put(("clear",))
                 try:
                     result = mod.recognize(frame, ocr_cfg)
                 except Exception as exc:
@@ -595,7 +612,12 @@ class Viewer(tk.Tk):
         try:
             while True:
                 kind, *payload = self._result_queue.get_nowait()
-                if kind == "result":
+                if kind == "clear":
+                    # 画面变化、新题识别中：立即清掉上一题的红框与动态选项框
+                    self._result = None
+                    self._draw_answer_box()
+                    self._draw_rois()
+                elif kind == "result":
                     result: ModuleResult = payload[0]
                     self._result = result
                     self._set_text(self._q_text, f"题目: {result.question or '-'}")
