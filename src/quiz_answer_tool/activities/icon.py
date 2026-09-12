@@ -152,11 +152,15 @@ def locate_icon(img: Image.Image, search: dict, panel_bg, tol: float = 28.0):
 
 
 class IconBank:
-    """图标库：name/hash 条目 + 名称索引 + 最近邻查询。"""
+    """图标库：name/hash 条目 + 名称索引 + 最近邻查询。
+
+    同一技能名可有多条哈希（官方素材版 + 游戏内实拍版），匹配取最小距离；
+    录入实拍哈希只追加、不覆盖，官方版永远保留。
+    """
 
     def __init__(self, entries: list[dict[str, Any]], threshold: int = DEFAULT_THRESHOLD):
         self._entries = entries
-        self._by_name: dict[str, str] = {}
+        self._by_name: dict[str, list[str]] = {}
         self._table: list[tuple[str, str, int]] = []
         self.threshold = threshold
         for e in entries:
@@ -164,7 +168,9 @@ class IconBank:
             h = str(e.get("hash", ""))
             if not name or not h:
                 continue
-            self._by_name.setdefault(name, h)
+            self._by_name.setdefault(name, [])
+            if h not in self._by_name[name]:
+                self._by_name[name].append(h)
             self._table.append((name, h, int(h, 16)))
 
     @classmethod
@@ -184,7 +190,16 @@ class IconBank:
         return len(self._entries)
 
     def hash_of(self, name: str) -> str | None:
-        return self._by_name.get(name)
+        """该名称的主哈希（第一条，通常为官方素材版）。"""
+        hs = self._by_name.get(name)
+        return hs[0] if hs else None
+
+    def min_distance(self, h: str, name: str) -> int | None:
+        """实况哈希对该名称所有已存哈希的最小距离。"""
+        hs = self._by_name.get(name)
+        if not hs:
+            return None
+        return min(hamming(h, x) for x in hs)
 
     def fuzzy_name(self, text: str) -> str | None:
         """OCR 出的选项名可能带错别字，模糊对回库名。"""
@@ -206,14 +221,12 @@ class IconBank:
         return (best[1], best[0]) if best else None
 
     def add(self, h: str, name: str) -> None:
-        if name in self._by_name:
-            for e in self._entries:
-                if e.get("name") == name:
-                    e["hash"] = h
-                    break
-        else:
-            self._entries.append({"name": name, "hash": h})
-        self._by_name[name] = h
+        """录入实拍哈希：同名的旧哈希保留，新哈希追加（去重）。"""
+        if h in self._by_name.get(name, []):
+            return
+        self._entries.append({"name": name, "hash": h})
+        self._by_name.setdefault(name, [])
+        self._by_name[name].append(h)
         self._table.append((name, h, int(h, 16)))
 
 
@@ -310,16 +323,18 @@ class IconModule(BaseModule):
         h = icon_hash(icon_crop)
         self.last_hash = h
         cands = option_candidates(o_lines)
-        # 3) 选项名过滤匹配：最优选项 = 库内距离最小的那个候选
+        # 3) 选项名过滤匹配：最优选项 = 库内距离最小的那个候选（含实拍哈希变体）
         scored: list[tuple[int, str, ocr.Line, float, float]] = []
         for name, ln, left, right in cands:
-            lib_h = self.bank.hash_of(name) if self.bank else None
-            if lib_h is None and self.bank:
-                fname = self.bank.fuzzy_name(name)
-                lib_h = self.bank.hash_of(fname) if fname else None
-            if lib_h is None:
+            if self.bank is None:
                 continue
-            scored.append((hamming(h, lib_h), name, ln, left, right))
+            d = self.bank.min_distance(h, name)
+            if d is None:
+                fname = self.bank.fuzzy_name(name)
+                d = self.bank.min_distance(h, fname) if fname else None
+            if d is None:
+                continue
+            scored.append((d, name, ln, left, right))
         if scored and self.bank:
             scored.sort(key=lambda t: t[0])
             best = scored[0]
