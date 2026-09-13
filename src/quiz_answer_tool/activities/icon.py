@@ -357,19 +357,23 @@ class IconModule(BaseModule):
             best = scored[0]
             # 与次优选项拉开 4 以上距离才算稳（防两个候选都贴近时的误选）
             margin_ok = len(scored) < 2 or scored[1][0] - best[0] >= 4
-            if best[0] <= self.option_max_distance and margin_ok:
+            if best[0] <= self.bank.threshold and margin_ok:
+                # 确认区（≤84）：直接给答案
                 res.answer = best[1]
                 res.question = f"看图识别：{best[1]}"
+                res.note = f"图标匹配距离 {best[0]}（选项过滤）"
                 res.answer_line = (best[2], best[3], best[4])
-                if best[0] <= self.bank.threshold:
-                    # 确认区：直接给答案
-                    res.note = f"图标匹配距离 {best[0]}（选项过滤）"
-                    res.state = "hit"
-                else:
-                    # 待核对区（threshold~option_max_distance）：大概率正确，提示自行核对
-                    res.note = f"待核对：距离 {best[0]} 偏大但领先次优，请对照图标确认"
-                    res.state = "soft_hit"
-                    res.answer = f"{best[1]}？"
+                res.state = "hit"
+                return res
+            # 软区（threshold~option_max_distance）：仅在领先次优 ≥10 分时才给"待核对"答案
+            # （绝对距离 90~104 的匹配误报率显著上升，边距必须更大）
+            if best[0] <= self.option_max_distance and len(scored) >= 2 and best[0] <= self.bank.threshold + 20 \
+                    and scored[1][0] - best[0] >= 10:
+                res.answer = best[1]
+                res.question = f"看图识别：{best[1]}？"
+                res.note = f"待核对：距离 {best[0]} 领先次优 {scored[1][0] - best[0]} 分，请对照图标确认"
+                res.answer_line = (best[2], best[3], best[4])
+                res.state = "soft_hit"
                 return res
         # 4) 全库兜底
         near = self.bank.nearest(h) if self.bank else None

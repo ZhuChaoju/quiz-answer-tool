@@ -528,7 +528,7 @@ class Viewer(tk.Tk):
                 ocr.recognize(blank, ocr_cfg.get("lang", "ch"), 0.6, ocr_cfg.get("model_type", "tiny"), True, dml)
             except Exception:
                 pass
-            last_hash: int | None = None
+            last_hash: tuple | None = None
             last_mod_id: str | None = None
             while alive():
                 time.sleep(interval)
@@ -539,11 +539,14 @@ class Viewer(tk.Tk):
                     last_hash = None
                 try:
                     frame, _ = screen.capture(source)
-                    gate_crop = mod.rois[gate_key].crop(frame, pad=0.02)
+                    # 变化闸门覆盖题面/图标 + 选项两个区域：
+                    # 同图标但选项换位时也要重新识别，否则红框残留指错位置
+                    gate_main = _dhash(mod.rois[gate_key].crop(frame, pad=0.02))
+                    gate_opt = _dhash(mod.rois["option"].crop(frame, pad=0.02))
+                    cur = (gate_main, gate_opt)
                 except Exception as exc:
                     self._result_queue.put(("error", f"截图失败: {exc}"))
                     continue
-                cur = _dhash(gate_crop)
                 if cur == last_hash:
                     continue
                 last_hash = cur
