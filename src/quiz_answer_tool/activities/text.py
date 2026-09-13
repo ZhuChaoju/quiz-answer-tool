@@ -173,7 +173,7 @@ class TextModule(BaseModule):
                     pass
             if res.answer_line is None:
                 # 象限兜底：2x2 四块分别放大识别，命中块的红框覆盖整块
-                res.answer_line = self._quadrant_locate(o_crop, answer, lang, conf, dml)
+                res.answer_line = self._locate_answer_quadrant(o_crop, answer, lang, conf, dml)
         else:
             res.note = "题库未命中，可录入答案"
         return res
