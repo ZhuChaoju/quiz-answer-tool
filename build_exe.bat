@@ -42,8 +42,7 @@ if exist "%ROOT%dist\release\banks\yuanxiao\questions.json" copy /y "%ROOT%dist\
 copy /y "%ROOT%dist\quiz-answer-tool.exe" "%ROOT%dist\release\" >nul
 if exist "%ROOT%dist\release\banks" rmdir /s /q "%ROOT%dist\release\banks"
 xcopy /e /i /q "%ROOT%banks" "%ROOT%dist\release\banks" >nul
-REM 仅当 release 里还没有用户配置时才放示例配置（绝不覆盖用户已保存的偏好）
-if not exist "%ROOT%dist\release\config.json" copy /y "%ROOT%config\config.example.json" "%ROOT%dist\release\config.json" >nul
+copy /y "%ROOT%config\config.example.json" "%ROOT%dist\release\config.json" >nul
 
 echo.
 echo [OK] Done:
