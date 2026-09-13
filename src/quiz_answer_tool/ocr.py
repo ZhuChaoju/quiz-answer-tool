@@ -119,6 +119,28 @@ def recognize(
     merge_threshold：折行合并阈值（相对行高），按活动模块配置传入。
     """
     engine = _get_engine2(model_type, use_dml) if parallel else _get_engine(model_type, use_dml)
+    return _run_engine(engine, img, min_confidence, merge_threshold)
+
+
+def recognize_hq(
+    img: Image.Image,
+    lang: str = "ch",
+    min_confidence: float = 0.6,
+    use_dml: bool = False,
+    merge_threshold: float = 0.6,
+) -> list[Line]:
+    """用独立的 small 模型引擎重识别（红框定位失败时的兜底，不与主引擎互相重建）。"""
+    global _ocr_engine_small, _SMALL_DML
+    if "_ocr_engine_small" not in globals():
+        _ocr_engine_small = None
+        _SMALL_DML = None
+    if _ocr_engine_small is None or _SMALL_DML != use_dml:
+        _ocr_engine_small = _build_engine("small", use_dml)
+        _SMALL_DML = use_dml
+    return _run_engine(_ocr_engine_small, img, min_confidence, merge_threshold)
+
+
+def _run_engine(engine, img: Image.Image, min_confidence: float, merge_threshold: float) -> list[Line]:
     result = engine(np.asarray(img.convert("RGB")))
     lines: list[Line] = []
     if result.txts:
