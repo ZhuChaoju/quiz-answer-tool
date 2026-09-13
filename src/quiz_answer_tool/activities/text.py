@@ -105,16 +105,31 @@ class TextModule(BaseModule):
     def recognize(self, frame: Image.Image, ocr_cfg: dict[str, Any]) -> ModuleResult:
         res = ModuleResult()
         roi_q, roi_o = self.rois["question"], self.rois["option"]
-        q_crop = roi_q.crop(frame, pad=0.02)
-        o_crop = roi_o.crop(frame, pad=0.02)
         mt = ocr_cfg.get("model_type", "tiny")
         lang = ocr_cfg.get("lang", "ch")
         conf = float(ocr_cfg.get("confidence", 0.4))
         dml = bool(ocr_cfg.get("use_dml", False))
+        th = self.merge_threshold
+        if self.roi_variants:
+            # 多布局变体：逐变体 OCR 题面区，选题面文字最多的那套布局
+            best_chars, best_q, best_o = -1, None, None
+            for rv in self.roi_variants:
+                qc = rv["question"].crop(frame, pad=0.02)
+                ls_q = [
+                    ln for ln in ocr.recognize(qc, lang, max(conf, 0.3), mt, False, dml, th)
+                    if not self.is_noise(ln.text)
+                ]
+                chars = sum(len(ln.text) for ln in ls_q)
+                if chars > best_chars:
+                    best_chars, best_q, best_o = chars, qc, rv["option"].crop(frame, pad=0.02)
+            q_crop, o_crop = best_q, best_o
+        else:
+            q_crop = roi_q.crop(frame, pad=0.02)
+            o_crop = roi_o.crop(frame, pad=0.02)
         # 选项区用第二引擎实例并行识别（端到端延迟 ≈ max(题目, 选项)，~200ms 量级）
-        fo = _OCR_EXECUTOR.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml, self.merge_threshold)
+        fo = _OCR_EXECUTOR.submit(ocr.recognize, o_crop, lang, conf, mt, True, dml, th)
         q_lines = [
-            ln for ln in ocr.recognize(q_crop, lang, conf, mt, False, dml, self.merge_threshold)
+            ln for ln in ocr.recognize(q_crop, lang, conf, mt, False, dml, th)
             if not self.is_noise(ln.text)
         ]
         # 选项区只剔除空行：科举选项常为单字（金/木/水/火），不能套用题目区的短行噪声规则

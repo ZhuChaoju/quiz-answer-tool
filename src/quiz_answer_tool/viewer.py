@@ -489,6 +489,7 @@ class Viewer(tk.Tk):
             last_opt: int | None = None
             pending_opt: int | None = None
             pending_count = 0
+            last_rec_t = 0.0
             last_mod_id: str | None = None
             while alive():
                 time.sleep(interval)
@@ -502,13 +503,26 @@ class Viewer(tk.Tk):
                     # 两级变化闸门：题面/图标区 = 题目身份；选项区 = 选项布局。
                     # 选项区单独变化（同题换选项）只重新定位红框，不清答案不闪烁；
                     # 选项区去抖：连续两轮哈希一致才认定真的变了（过滤动画噪声）。
+                    # 布局变体（有图/无图）的题面区也纳入闸门。
                     gate_main = _dhash(mod.rois[gate_key].crop(frame, pad=0.02))
                     gate_opt = _dhash(mod.rois["option"].crop(frame, pad=0.02))
+                    gate_var = 0
+                    for rv in getattr(mod, "roi_variants", []):
+                        if "question" in rv:
+                            gate_var ^= _dhash(rv["question"].crop(frame, pad=0.02))
+                    cur = (gate_main, gate_opt, gate_var)
                 except Exception as exc:
                     self._result_queue.put(("error", f"截图失败: {exc}"))
                     continue
 
                 def run_recognition():
+                    nonlocal last_rec_t
+                    # 识别频率上限：动画画面会频繁触发闸门，全量 OCR 最高 3 次/秒
+                    now = time.perf_counter()
+                    wait = 0.33 - (now - last_rec_t)
+                    if wait > 0:
+                        time.sleep(wait)
+                    last_rec_t = time.perf_counter()
                     try:
                         result = mod.recognize(frame, ocr_cfg)
                     except Exception as exc:
