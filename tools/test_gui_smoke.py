@@ -42,15 +42,7 @@ def run() -> None:
             app._locked.set(False)
             app._update_roi_label()
             app._locked.set(True)
-            # 浮窗
-            assert app._overlay is not None and app._overlay.win.winfo_exists(), "overlay missing"
-            app._overlay.update("测试题目：1+1=?", "2", "冒烟测试")
-            app._overlay.move_to(300, 300)
-            # 穿透切换（Windows API）
-            app._clickthrough.set(True)
-            app._sync_overlay()
-            app._clickthrough.set(False)
-            app._sync_overlay()
+            # 浮窗功能已移除
             # 仅识别区域模式渲染一张假帧
             from PIL import Image
 

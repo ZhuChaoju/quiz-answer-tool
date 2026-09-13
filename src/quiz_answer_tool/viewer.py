@@ -22,7 +22,6 @@ from PIL import Image, ImageTk
 
 from . import ocr, screen
 from .activities import BaseModule, ModuleResult, load_modules
-from .overlay import AnswerOverlay
 
 PREVIEW_FPS = 30
 ANSWER_COLOR = "#ff4040"
@@ -54,14 +53,11 @@ class Viewer(tk.Tk):
         self._lock_by_mod: dict[str, bool] = {}
         self._locked = tk.BooleanVar(value=False)
         self._roi_only = tk.BooleanVar(value=bool(ui.get("roi_only", False)))
-        self._overlay_on = tk.BooleanVar(value=bool(ui.get("overlay", True)))
-        self._clickthrough = tk.BooleanVar(value=False)
 
         self._result_queue: queue.Queue = queue.Queue()
         self._preview_queue: queue.Queue = queue.Queue(maxsize=1)
         self._running = False
         self._generation = 0
-        self._overlay: AnswerOverlay | None = None
         self._drag = None
         self._result: ModuleResult | None = None
         self._sources: list = []
@@ -89,7 +85,7 @@ class Viewer(tk.Tk):
         self._locked.set(self._module_lock_default())
 
         self._build_ui()
-        self.geometry("1400x950")
+        self.geometry("2000x1350")
         self.update_idletasks()
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         self.geometry(f"+{max(sw - self.winfo_width() - 20, 0)}+{max((sh - self.winfo_height()) // 2, 0)}")
@@ -139,12 +135,6 @@ class Viewer(tk.Tk):
         ttk.Checkbutton(
             second, text="只显示识别区域", variable=self._roi_only, command=self._clear_display
         ).pack(side="left")
-        ttk.Checkbutton(second, text="答题浮窗", variable=self._overlay_on, command=self._sync_overlay).pack(
-            side="left", padx=(14, 0)
-        )
-        ttk.Checkbutton(second, text="浮窗鼠标穿透", variable=self._clickthrough, command=self._sync_overlay).pack(
-            side="left", padx=(14, 0)
-        )
         ttk.Label(second, text="（锁定后拖动预览中的框不会影响识别；解锁拖完可「保存为预设」）", foreground="#777").pack(
             side="left", padx=14
         )
@@ -176,7 +166,6 @@ class Viewer(tk.Tk):
         ttk.Label(row, textvariable=self._roi_var, foreground="#666").pack(side="right")
         self._update_roi_label()
         self._reload_sources()
-        self._sync_overlay(initial=True)
 
     def _readonly_text(
         self, master, height: int, fg: str = "#000", bold: bool = False, font_size: int = 10
@@ -217,11 +206,6 @@ class Viewer(tk.Tk):
         self._locked.set(self._module_lock_default())
         self._result = None
         self._clear_display()
-        self._sync_overlay()
-        if self._overlay and self._overlay.win.winfo_exists():
-            pos = self.cfg.get("ui", {}).get("overlay_pos", {}).get(self._module.id)
-            if pos:
-                self._overlay.move_to(int(pos[0]), int(pos[1]))
         self._update_roi_label()
 
     def _on_roi_only_changed(self, *_args) -> None:
@@ -243,41 +227,13 @@ class Viewer(tk.Tk):
         ui = dict(data.get("ui", {}))
         ui["module"] = self._module.id
         ui["roi_only"] = bool(self._roi_only.get())
-        ui["overlay"] = bool(self._overlay_on.get())
         ui["locked"] = {**ui.get("locked", {}), self._module.id: bool(self._locked.get())}
-        overlay_pos = dict(ui.get("overlay_pos", {}))
-        for mid, pos in getattr(self, "_overlay_pos_by_mod", {}).items():
-            overlay_pos[mid] = list(pos)
-        if self._overlay and self._overlay.win.winfo_exists():
-            overlay_pos[self._module.id] = [self._overlay.win.winfo_x(), self._overlay.win.winfo_y()]
-        ui["overlay_pos"] = overlay_pos
         data["ui"] = ui
         try:
             with open(self.config_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except OSError:
             pass
-
-    # ---------- 浮窗 ----------
-    def _sync_overlay(self, initial: bool = False) -> None:
-        if self._overlay_on.get():
-            if self._overlay is None or not self._overlay.win.winfo_exists():
-                self._overlay = AnswerOverlay(self, on_close=self._remember_overlay_pos)
-                pos = self.cfg.get("ui", {}).get("overlay_pos", {}).get(self._module.id)
-                if pos:
-                    self._overlay.move_to(int(pos[0]), int(pos[1]))
-                else:  # 默认放屏幕右上角
-                    self._overlay.move_to(max(self.winfo_screenwidth() - 400, 0), 80)
-            self._overlay.set_clickthrough(bool(self._clickthrough.get()))
-        elif self._overlay and self._overlay.win.winfo_exists():
-            self._overlay.close()
-            self._overlay = None
-
-    def _remember_overlay_pos(self, x: int, y: int) -> None:
-        """浮窗拖动时实时回传位置，随主窗口关闭写回 config（按模块记忆）。"""
-        if not hasattr(self, "_overlay_pos_by_mod"):
-            self._overlay_pos_by_mod = {}
-        self._overlay_pos_by_mod[self._module.id] = (x, y)
 
     # ---------- 来源 ----------
     def _reload_sources(self) -> None:
@@ -685,11 +641,8 @@ class Viewer(tk.Tk):
                         self._set_text(self._a_text, f"答案: {result.answer}" if result.answer else "未命中")
                     raw = "\n".join(ln.text for ln in result.lines)
                     self._set_text(self._raw_text, f"识别文本: {raw}" if raw else "识别文本: -")
-                    if self._overlay and self._overlay.win.winfo_exists():
-                        ans = result.answer
-                        if result.state == "soft_hit":
-                            ans = f"{ans}？" if ans else "未命中"
-                        self._overlay.update(result.question, ans, result.note)
+                    if result.state == "soft_hit":
+                        self._set_text(self._a_text, f"答案(待核对): {result.answer}")
                     self._draw_answer_box()
                     self._append_result_log(result)
                 elif kind == "error":
@@ -702,6 +655,4 @@ class Viewer(tk.Tk):
         self._running = False
         self._save_config()
         time.sleep(0.3)
-        if self._overlay and self._overlay.win.winfo_exists():
-            self._overlay.close()
         self.destroy()
