@@ -35,6 +35,10 @@ if errorlevel 1 (
 
 echo [3/3] Assemble release folder (exe + banks + config example)...
 if not exist "%ROOT%dist\release" mkdir "%ROOT%dist\release"
+REM 保住用户在 release 里录入的数据（图标库/题库），不被仓库副本覆盖
+if exist "%ROOT%dist\release\banks\teachers\icons.json" copy /y "%ROOT%dist\release\banks\teachers\icons.json" "%ROOT%banks\teachers\icons.json" >nul
+if exist "%ROOT%dist\release\banks\keju\questions.json" copy /y "%ROOT%dist\release\banks\keju\questions.json" "%ROOT%banks\keju\questions.json" >nul
+if exist "%ROOT%dist\release\banks\yuanxiao\questions.json" copy /y "%ROOT%dist\release\banks\yuanxiao\questions.json" "%ROOT%banks\yuanxiao\questions.json" >nul
 copy /y "%ROOT%dist\quiz-answer-tool.exe" "%ROOT%dist\release\" >nul
 if exist "%ROOT%dist\release\banks" rmdir /s /q "%ROOT%dist\release\banks"
 xcopy /e /i /q "%ROOT%banks" "%ROOT%dist\release\banks" >nul

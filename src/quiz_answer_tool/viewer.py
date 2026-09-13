@@ -435,6 +435,7 @@ class Viewer(tk.Tk):
             return
         self._running = True
         self._start_btn.config(text="停止")
+        self._save_config()  # 点开始即保存当前活动/设置，异常退出也不丢
         self._start_threads(source)
 
     def _start_threads(self, source) -> None:

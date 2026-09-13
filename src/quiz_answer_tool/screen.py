@@ -57,6 +57,21 @@ def list_sources() -> list[Source]:
     return sources
 
 
+def find_game_source(part: str = "梦幻西游") -> Source | None:
+    """按标题重新定位游戏主窗口（游戏重启后句柄会变，用标题找回）。
+
+    优先含 ONLINE 的主窗口；找不到返回 None。
+    """
+    best: Source | None = None
+    for s in list_sources():
+        if s.kind != "window" or part not in s.name:
+            continue
+        if "ONLINE" in s.name.upper():
+            return s
+        best = best or s
+    return best
+
+
 def capture(source: Source) -> tuple[Image.Image, ScreenRect]:
     """抓取来源画面，返回 (PIL.Image, 原始屏幕坐标矩形)。"""
     sct = _mss()
