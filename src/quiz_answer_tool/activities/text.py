@@ -163,9 +163,18 @@ class TextModule(BaseModule):
             res.note = "题库未命中，可录入答案"
         return res
 
-    def _quadrant_locate(self, o_crop: Image.Image, answer: str, lang: str, conf: float, dml: bool):
-        """把选项区切成 2x2 四块分别识别，返回包含答案文本的块边界（裁剪图像素坐标）。"""
+    def _locate_answer_quadrant(
+        self, o_crop: Image.Image, answer: str, lang: str, conf: float, dml: bool
+    ):
+        """红框主定位：选项区切 2x2 四块，逐块放大识别，答案文本命中的块即目标选项。
+
+        两级识别：先 tiny（快），块间歧义或全未命中时对候选块用 small 精扫。
+        返回 (伪Line, 块左x, 块右x)，红框覆盖整块（即整个选项）。
+        """
         from rapidfuzz import fuzz
+
+        from ..matcher import normalize
+        from ..ocr import Line
 
         w, h = o_crop.size
         quads = [
@@ -174,40 +183,48 @@ class TextModule(BaseModule):
             (0, h // 2, w // 2, h),
             (w // 2, h // 2, w, h),
         ]
-        want = answer.strip()
-        best = None
-        for (ql, qt, qr, qb) in quads:
+        want = normalize(answer.strip())
+
+        def read(q, model_type):
+            ql, qt, qr, qb = q
             sub = o_crop.crop((ql, qt, qr, qb))
             sub = sub.resize((sub.width * 3, sub.height * 3), Image.LANCZOS)
             try:
-                lines_q = ocr.recognize_hq(sub, lang, max(conf, 0.3), dml, self.merge_threshold)
+                return ocr.recognize(sub, lang, max(conf, 0.3), model_type, True, dml, self.merge_threshold)
             except Exception:
-                continue
-            text_q = "".join(ln.text for ln in lines_q)
-            from ..matcher import normalize
+                return []
 
-            nq, nt = normalize(text_q), normalize(want)
-            score = 0
-            if nt and nt in nq:
-                score = 100
-            else:
-                from rapidfuzz import fuzz
+        def quad_text(q, model_type):
+            return normalize("".join(ln.text for ln in read(q, model_type)))
 
-                score = int(fuzz.ratio(nt, nq)) if nt else 0
-            if score >= 60 and (best is None or score > best[0]):
-                best = (score, (ql, qt, qr, qb))
-        if best:
-            ql, qt, qr, qb = best[1]
-            # 打包成与 answer_line 兼容的格式：伪 Line 承载中心/高度
-            from ..ocr import Line
+        def score_of(q, model_type):
+            nt = quad_text(q, model_type)
+            if not want or not nt:
+                return 0
+            if want in nt:
+                return 100
+            return int(fuzz.ratio(want, nt))
 
-            pseudo = Line(
-                text=want,
-                center_x=(ql + qr) / 2,
-                center_y=(qt + qb) / 2,
-                confidence=1.0,
-                width=qr - ql,
-                height=qb - qt,
-            )
-            return pseudo, float(ql), float(qr)
-        return None
+        # 第一级：tiny 快扫
+        scores = [(score_of(q, "tiny"), q) for q in quads]
+        scores.sort(key=lambda t: -t[0])
+        best_score, best_q = scores[0]
+        if best_score < 60 or (len(scores) > 1 and scores[1][0] >= best_score):
+            # 歧义/全未命中：small 精扫再裁决
+            scores2 = [(score_of(q, "small"), q) for q in quads]
+            scores2.sort(key=lambda t: -t[0])
+            if scores2[0][0] > best_score:
+                best_score, best_q = scores2[0]
+
+        if best_score < 60:
+            return None
+        ql, qt, qr, qb = best_q
+        pseudo = Line(
+            text=answer.strip(),
+            center_x=(ql + qr) / 2,
+            center_y=(qt + qb) / 2,
+            confidence=1.0,
+            width=qr - ql,
+            height=qb - qt,
+        )
+        return pseudo, float(ql), float(qr)
