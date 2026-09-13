@@ -37,5 +37,9 @@
     }
   },
   "locked": false,
-  "option_max_distance": 100
+  "option_max_distance": 100,
+  "gate_keywords": [
+    "技能或法术名称",
+    "请指出下图"
+  ]
 }

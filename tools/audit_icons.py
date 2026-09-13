@@ -14,7 +14,7 @@ from quiz_answer_tool.activities.icon import hamming, icon_hash
 
 ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 ICON_DIR = os.path.join(ROOT, "banks", "teachers", "icons")
-entries = json.load(open(os.path.join(ROOT, "banks", "teachers", "icons.json"), encoding="utf-8-sig"))
+entries = json.load(open(os.path.join(ROOT, "dist", "release", "banks", "teachers", "icons.json"), encoding="utf-8-sig"))
 by_name = {e["name"]: e for e in entries}
 
 # 每个条目重算官方素材哈希

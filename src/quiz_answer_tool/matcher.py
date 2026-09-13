@@ -36,6 +36,28 @@ class QuestionBank:
             data = json.load(f)
         return cls(data)
 
+    def find_by_answer(self, answer: str) -> list[dict]:
+        """按答案文本查条目（归一化精确匹配），供录入查重与删除。"""
+        na = normalize(answer)
+        if not na:
+            return []
+        out = []
+        for k, e in self._index:
+            if normalize(e.get("answer", "")) == na:
+                out.append(e)
+        return out
+
+    def remove(self, question: str) -> dict | None:
+        """按题面删除条目，返回被删的条目；不存在返回 None。"""
+        nq = normalize(question)
+        for k, e in self._index:
+            if normalize(k) == nq:
+                self._index.remove((k, e))
+                self._keys.remove(k)
+                self._raw.remove(e)
+                return e
+        return None
+
     def add(self, question: str, answer: str) -> None:
         """运行时收录一条题目答案（题目已存在时用新答案覆盖旧答案）。"""
         key = normalize(question)

@@ -65,7 +65,7 @@ def render_dialog(path: str, size: tuple[int, int], dialog: tuple[int, int, int,
 
 def main() -> None:
     mods = {m.id: m for m in load_modules(os.path.join(ROOT, "banks"))}
-    assert set(mods) == {"teachers", "keju_huishi", "keju_xiangshi", "yuanxiao"}, mods.keys()
+    assert set(mods) == {"teachers", "keju", "yuanxiao"}, mods.keys()
     tmp = os.path.join(ROOT, "build", "test_frames")
     os.makedirs(tmp, exist_ok=True)
     passed = failed = 0
@@ -76,7 +76,7 @@ def main() -> None:
     dlg = web.crop((420, 25, 1290, 830))  # 网图中的会试对话框 870x805（固定像素大小）
     live = Image.new("RGB", (1036, 831), (60, 70, 90))  # 模拟实测窗口
     live.paste(dlg, ((1036 - dlg.width) // 2, (831 - dlg.height) // 2))  # 居中
-    mod = mods["keju_huishi"]
+    mod = mods["keju"]
     # 网图布局与当前 ROI 校准（按实机窗口）不同：直接检查 OCR+匹配产物即可，
     # 不再断言题库命中（几何已由合成用例覆盖）
     r = mod.recognize(live, OCR_CFG)
@@ -93,11 +93,11 @@ def main() -> None:
     bank = json.load(open(os.path.join(ROOT, "banks", "keju", "questions.json"), encoding="utf-8-sig"))
     q1 = next(q for q in bank if q["question"].startswith("梦幻西游中有多少个种族"))
     size = (1024, 768)
-    mx = mods["keju_xiangshi"]
+    mx = mods["keju"]
     p1 = os.path.join(tmp, "xiangshi.png")
     render_dialog(p1, size, (230, 100, 850, 660),
                   roi_rect(mx, "question", size), roi_rect(mx, "option", size),
-                  f"第3题：{q1['question']}", ["3", "6", "9"], vertical=True)
+                  f"礼部考题，已答3题，答对3题。{q1['question']}", ["3", "6", "9"], vertical=True)
     t0 = time.perf_counter()
     r = mx.recognize(Image.open(p1).convert("RGB"), OCR_CFG)
     dt = (time.perf_counter() - t0) * 1000
@@ -114,7 +114,7 @@ def main() -> None:
     my = mods["yuanxiao"]
     render_dialog(p2, size, (230, 100, 850, 660),
                   roi_rect(my, "question", size), roi_rect(my, "option", size),
-                  f"灯谜：{q2['question']}", ["有去无回", "自身难保", "越洗越脏", "一步登天"])
+                  f"元宵节灯谜：{q2['question']}", ["有去无回", "自身难保", "越洗越脏", "一步登天"])
     t0 = time.perf_counter()
     r = my.recognize(Image.open(p2).convert("RGB"), OCR_CFG)
     dt = (time.perf_counter() - t0) * 1000
@@ -127,7 +127,7 @@ def main() -> None:
     # ---- 4) 会试：合成题图（含关卡前缀+自动折行） ----
     q3 = next(q for q in bank if "中医将五脏与五行相对应" in q["question"])
     p3 = os.path.join(tmp, "huishi_synth.png")
-    mh = mods["keju_huishi"]
+    mh = mods["keju"]
     render_dialog(p3, size, (330, 90, 990, 680),
                   roi_rect(mh, "question", size), roi_rect(mh, "option", size),
                   f"御前科举大赛第1关：这一关考的是茶酒中药。题目：{q3['question']}",

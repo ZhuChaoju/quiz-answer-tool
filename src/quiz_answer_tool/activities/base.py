@@ -100,6 +100,18 @@ class BaseModule:
                 )
         # OCR 行折行合并阈值（相对行高）；科举折行题面 0.6，可按模块配置覆盖
         self.merge_threshold = float(data.get("merge_threshold", 0.6))
+        # 答案白名单：名单内的答案允许在多个条目上重复（文件不存在则为空）
+        wl = os.path.join(bank_dir, "whitelist.json")
+        self.answer_whitelist: list[str] = []
+        if os.path.exists(wl):
+            try:
+                import json
+
+                self.answer_whitelist = [
+                    str(x) for x in json.load(open(wl, encoding="utf-8-sig"))
+                ]
+            except Exception:
+                self.answer_whitelist = []
 
     # ---- 识别（由识别线程调用，frame 为整幅截图） ----
     def recognize(self, frame: Image.Image) -> ModuleResult:

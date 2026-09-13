@@ -128,6 +128,7 @@ class Viewer(tk.Tk):
         )
         self._lock_btn.pack(side="right", padx=8)
         ttk.Button(top, text="保存为预设", command=self._save_preset).pack(side="right", padx=6)
+        ttk.Button(top, text="白名单", command=self._open_whitelist).pack(side="right", padx=6)
 
         second = ttk.Frame(self, padding=(6, 0))
         second.pack(fill="x")
@@ -234,6 +235,11 @@ class Viewer(tk.Tk):
                 json.dump(data, f, ensure_ascii=False, indent=2)
         except OSError:
             pass
+
+    def _open_whitelist(self) -> None:
+        from .whitelist_editor import WhitelistEditor
+
+        WhitelistEditor(self._module, master=self)
 
     # ---------- 来源 ----------
     def _reload_sources(self) -> None:
@@ -562,6 +568,20 @@ class Viewer(tk.Tk):
         if not text:
             return
         mod = self._module
+        # 答案全局唯一（按活动分开）：同名答案已占用时拒绝录入，白名单豁免
+        owners = []
+        if mod.type == "icon" and mod.bank is not None:
+            owners = mod.bank.names_with_answer(text)
+        elif mod.type == "text" and mod.bank is not None:
+            owners = [e.get("question", "")[:36] for e in mod.bank.find_by_answer(text)]
+        whitelisted = text in getattr(mod, "answer_whitelist", [])
+        if owners and not whitelisted:
+            self._set_text(
+                self._a_text,
+                f"无法录入：「{text}」已存在于 {len(owners)} 个条目（{'、'.join(owners[:3])}"
+                f"{'…' if len(owners) > 3 else ''}）。加入白名单可允许多条，或先删除占用条目",
+            )
+            return
         if mod.type == "icon":
             if mod.last_hash is None:
                 self._set_text(self._a_text, "没有可收录的图标（先识别一次）")
@@ -573,7 +593,8 @@ class Viewer(tk.Tk):
                 except OSError as exc:
                     self._set_text(self._a_text, f"写入图标库失败: {exc}")
                     return
-            self._set_text(self._a_text, f"已收录图标: {text}（共 {len(mod.bank)} 个）")
+            extra = "（白名单，允许多条）" if whitelisted else ""
+            self._set_text(self._a_text, f"已收录图标: {text}（共 {len(mod.bank)} 个）{extra}")
         else:
             q = getattr(mod, "last_question", "")
             if not q:
