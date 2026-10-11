@@ -534,7 +534,9 @@ class Viewer(tk.Tk):
                     except Exception as exc:
                         self._result_queue.put(("error", f"识别失败: {exc}"))
                         return
-                    self._result_queue.put(("result", result))
+                    # 无题目时静默跳过，不更新 UI（避免动画导致的持续跳动）
+                    if result.state != "no_dialog":
+                        self._result_queue.put(("result", result))
 
                 if gate_main != last_main:
                     # 新题目：清旧框 + 全量识别
