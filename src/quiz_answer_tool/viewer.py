@@ -523,9 +523,9 @@ class Viewer(tk.Tk):
 
                 def run_recognition():
                     nonlocal last_rec_t
-                    # 识别频率上限：动画画面会频繁触发闸门，全量 OCR 最高 3 次/秒
+                    # 识别频率上限：动画画面会频繁触发闸门，全量 OCR 最高 10 次/秒
                     now = time.perf_counter()
-                    wait = 0.33 - (now - last_rec_t)
+                    wait = 0.1 - (now - last_rec_t)
                     if wait > 0:
                         time.sleep(wait)
                     last_rec_t = time.perf_counter()
