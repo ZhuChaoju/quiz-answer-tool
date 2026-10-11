@@ -51,6 +51,10 @@ class TextModule(BaseModule):
         if extra:
             mod.noise_extra = re.compile("|".join(extra))
         mod.gate_keywords: list = list(data.get("gate_keywords", []))
+        mod.title_keywords: list = list(data.get("title_keywords", []))
+        if "title" in data.get("roi", {}):
+            mod.rois["title"] = Roi.from_json(data["roi"]["title"])
+            mod.ROI_KEYS = mod.ROI_KEYS + ("title",)
         bank_rel = data.get("bank", "questions.json")
         bank_path = os.path.join(bank_dir, bank_rel)
         try:
@@ -111,6 +115,19 @@ class TextModule(BaseModule):
         conf = float(ocr_cfg.get("confidence", 0.4))
         dml = bool(ocr_cfg.get("use_dml", False))
         th = self.merge_threshold
+        # 标题闸门：只 OCR 标题条小区域（~20ms），确认有活动关键词才启动全量识别。
+        # 没有题目时几乎零 CPU，比全量 OCR 便宜 20 倍。
+        if self.title_keywords:
+            title_crop = self.rois["title"].crop(frame, pad=0.05)
+            title_raw = "".join(
+                ln.text for ln in ocr.recognize(
+                    title_crop, lang, 0.3, mt, False, dml, th
+                )
+            )
+            if not any(k in title_raw for k in self.title_keywords):
+                res.state = "no_dialog"
+                res.note = "标题未命中活动关键词"
+                return res
         if self.roi_variants:
             # 多布局变体：逐变体 OCR 题面区，选题面文字最多的那套布局
             best_chars, best_q, best_o, best_raw = -1, None, None, ""
