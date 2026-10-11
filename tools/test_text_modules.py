@@ -37,6 +37,12 @@ def render_dialog(path: str, size: tuple[int, int], dialog: tuple[int, int, int,
     img = Image.new("RGB", size, (40, 60, 50))
     d = ImageDraw.Draw(img)
     d.rectangle(dialog, fill=(168, 164, 210))
+    # 画标题栏文字（乡试/会试/灯谜），位置在对话框顶部
+    title_font = ImageFont.truetype(find_font(18), 18)
+    dl, dt, dr_, db_ = dialog
+    title_text = "乡试" if "xiangshi" in path else ("会试" if "huishi" in path else "灯谜")
+    tw = d.textlength(title_text, font=title_font)
+    d.text(((dl + dr_ - tw) / 2, dt + 6), title_text, fill=(200, 200, 220), font=title_font)
     font = ImageFont.truetype(find_font(22), 22)
     ql, qt, qr, qb = q_rect
     # 手动折行（矩形内每行约 (qr-ql-40)/22 个字）
